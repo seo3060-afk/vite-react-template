@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Clipboard, FileSpreadsheet, Box, Database, BarChart3, Settings2, X, Plus, Monitor, GripHorizontal, Search, DownloadCloud, AlertTriangle, History, Save, FolderDown, Trash2, Link2, Loader2, ChevronUp, ChevronDown, Users, RefreshCw } from 'lucide-react';
+import localforage from 'localforage';
 
 const App = () => {
   useEffect(() => { document.title = "PO 자동 배정 프로그램 - 슬라이서프로"; }, []);
@@ -122,17 +123,20 @@ const App = () => {
   }, [inputSearchInput]);
 
   useEffect(() => { 
-    try {
-      const s = localStorage.getItem('po_auto_assign_history'); 
-      if (s) {
-        const p = JSON.parse(s);
-        if (Array.isArray(p)) {
+    const loadHistoryData = async () => {
+      try {
+        // ⭐️ 기존 동기식 localStorage 대신 비동기 대용량 DB로 읽어옵니다.
+        const p = await localforage.getItem('po_auto_assign_history'); 
+        if (p && Array.isArray(p)) {
           setHistoryList(p.filter(h => h && typeof h === 'object').map(h => ({
             id: h.id || `hist-${Math.random()}`, date: h.date || '', name: h.name || '이름 없음', data: h.data || {}
           })));
         }
+      } catch (e) {
+        console.error("데이터베이스 로드 중 오류 발생:", e);
       }
-    } catch (e) {}
+    };
+    loadHistoryData();
   }, []);
 
   const cleanPN = str => String(str || '').replace(/[\s-]/g, '').toUpperCase();
@@ -178,7 +182,8 @@ const App = () => {
     }
   };
 
-  const saveCurrentState = (customName = null, currentData = null) => {
+  // ⭐️ 비동기(async) 방식으로 변경하여 대용량 데이터를 안전하게 저장합니다.
+  const saveCurrentState = async (customName = null, currentData = null) => {
     const nameToSave = customName || newHistoryName;
     if (!nameToSave || !nameToSave.trim()) { alert("저장할 이름을 입력해주세요."); return; }
     
@@ -189,29 +194,25 @@ const App = () => {
       data: dataToSave 
     };
     
-    let updated = [newEntry, ...historyList].slice(0, 7); 
-    let isSaved = false;
+    // 용량이 넉넉하므로 최대 10개까지 이력을 보관합니다.
+    let updated = [newEntry, ...historyList].slice(0, 10); 
 
-    while (!isSaved && updated.length > 0) {
-      try {
-        localStorage.setItem('po_auto_assign_history', JSON.stringify(updated));
-        setHistoryList(updated); 
-        setNewHistoryName('');
-        isSaved = true;
-      } catch (e) {
-        if (updated.length > 1) {
-          updated.pop();
-        } else {
-          alert("단일 데이터 크기가 브라우저 제한을 초과하여 저장할 수 저장할 수 없습니다.");
-          break;
-        }
-      }
+    try {
+      // JSON.stringify 없이 바로 저장 (localforage가 알아서 최적화 처리)
+      await localforage.setItem('po_auto_assign_history', updated);
+      setHistoryList(updated); 
+      setNewHistoryName('');
+      if (!customName) alert("대용량 데이터베이스에 안전하게 저장되었습니다.");
+    } catch (e) {
+      console.error(e);
+      alert("데이터 저장 중 오류가 발생했습니다. 브라우저 저장소 용량을 비워주세요.");
     }
   };
 
   const autoSaveToHistory = (alertMessage, currentData = null) => {
     const now = new Date();
     const ds = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    // saveCurrentState가 async로 바뀌었으므로 그냥 호출만 해둡니다.
     saveCurrentState(`[자동저장] ${ds}`, currentData);
     if(alertMessage) alert(`${alertMessage}\n(데이터가 히스토리에 자동 저장되었습니다)`);
   };
@@ -242,10 +243,12 @@ const App = () => {
     }
   };
 
-  const deleteState = id => {
+  // ⭐️ 삭제도 비동기 DB에 반영
+  const deleteState = async id => {
     if(window.confirm("삭제하시겠습니까?")) {
       const updated = historyList.filter(h => h.id !== id);
-      setHistoryList(updated); localStorage.setItem('po_auto_assign_history', JSON.stringify(updated));
+      setHistoryList(updated); 
+      await localforage.setItem('po_auto_assign_history', updated);
     }
   };
 
