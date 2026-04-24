@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Clipboard, FileSpreadsheet, Box, Database, BarChart3, Settings2, X, Plus, Monitor, GripHorizontal, Search, DownloadCloud, AlertTriangle, History, Save, FolderDown, Trash2, Link2, Loader2, ChevronUp, ChevronDown, Users, RefreshCw } from 'lucide-react';
 import localforage from 'localforage';
+import { db } from './firebase';
+import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, query, orderBy, limit } from 'firebase/firestore';
 
 const App = () => {
   useEffect(() => { document.title = "PO 자동 배정 프로그램 - 슬라이서프로"; }, []);
@@ -25,52 +27,14 @@ const App = () => {
   const [errorFilters, setErrorFilters] = useState({ shortage: false, distOverRecv: false, allocDiff: false }); 
   const [inlineAdj, setInlineAdj] = useState(null);
 
-  // 강력한 로컬 스토리지 데이터 무결성 검증
-  const [factoryDB, setFactoryDB] = useState(() => {
-    try {
-      const s = localStorage.getItem('po_factory_db_final');
-      if (!s) return [];
-      const p = JSON.parse(s);
-      if (!Array.isArray(p)) return [];
-      return p.filter(i => i && typeof i === 'object').map(i => ({
-        id: i.id || `fdb-${Math.random()}`, countryVehicle: i.countryVehicle || '', location: i.location || '',
-        wmsFactory: i.wmsFactory || '', dPlus: i.dPlus || '', isCurrentMonthOnly: !!i.isCurrentMonthOnly, isExcluded: !!i.isExcluded, isCustom: !!i.isCustom
-      }));
-    } catch(e) { return []; }
-  }); 
-  
-  const [factories, setFactories] = useState(() => {
-    try {
-      const s = localStorage.getItem('po_factory_priority_final');
-      const p = s ? JSON.parse(s) : null;
-      if (Array.isArray(p)) {
-        let fList = p.filter(f => f && typeof f === 'string').map(f => f === '납기대로' ? '자동배정' : f);
-        if (!fList.includes('자동배정')) fList.push('자동배정');
-        return [...new Set(fList)];
-      }
-    } catch (e) {} 
-    return ['화성', '화성(항공)', '파이롯트', '청북', '청주', '경주', '강동', '하네스', '테크', '판매', '자동배정'];
-  });
+  // ⭐️ 백엔드 서버 API 주소 (본인 서버 주소로 나중에 변경하세요)
+  const API_BASE_URL = 'https://본인의-웹서버-주소.com/api';
 
-  const [factoryLimits, setFactoryLimits] = useState(() => {
-    try {
-      const s = localStorage.getItem('po_factory_limits_v9');
-      const p = s ? JSON.parse(s) : {};
-      return (typeof p === 'object' && !Array.isArray(p)) ? p : {};
-    } catch (e) { return {}; }
-  });
-
-  const [suppliers, setSuppliers] = useState(() => {
-    try {
-      const s = localStorage.getItem('po_suppliers_v9');
-      if (!s) return [];
-      const p = JSON.parse(s);
-      if (!Array.isArray(p)) return [];
-      return p.filter(i => i && typeof i === 'object').map(i => ({
-        id: i.id || `sup-${Math.random()}`, name: i.name || '', dPlus: i.dPlus || '', isCurrentMonthOnly: !!i.isCurrentMonthOnly, isExcluded: !!i.isExcluded
-      }));
-    } catch(e) { return []; }
-  });
+  // 서버에서 불러오기 전까지 빈 배열/기본값으로 세팅합니다.
+  const [factoryDB, setFactoryDB] = useState([]); 
+  const [factories, setFactories] = useState(['화성', '화성(항공)', '파이롯트', '청북', '청주', '경주', '강동', '하네스', '테크', '판매', '자동배정']);
+  const [factoryLimits, setFactoryLimits] = useState({});
+  const [suppliers, setSuppliers] = useState([]);
 
   const [results, setResults] = useState([]);            
   const [itemSummary, setItemSummary] = useState([]); 
@@ -105,10 +69,25 @@ const App = () => {
   const [showAppendedOnly, setShowAppendedOnly] = useState(false); 
 
 
-  useEffect(() => { localStorage.setItem('po_factory_priority_final', JSON.stringify(factories)); }, [factories]);
-  useEffect(() => { localStorage.setItem('po_factory_db_final', JSON.stringify(factoryDB)); }, [factoryDB]);
-  useEffect(() => { localStorage.setItem('po_factory_limits_v9', JSON.stringify(factoryLimits)); }, [factoryLimits]);
-  useEffect(() => { localStorage.setItem('po_suppliers_v9', JSON.stringify(suppliers)); }, [suppliers]);
+  // ⭐️ 설정값(공장, 우선순위, 공급업체)이 변경될 때마다 Firebase 서버에 자동 저장
+  useEffect(() => { 
+    // 최초 앱 실행 시 빈 값으로 서버 데이터를 덮어쓰는 것을 방지
+    if (factoryDB.length === 0 && suppliers.length === 0) return; 
+
+    const saveSettingsToFirebase = async () => {
+      try {
+        await setDoc(doc(db, 'po_system', 'settings'), { 
+          factoryDB, factories, suppliers 
+        });
+      } catch (error) {
+        console.error("Firebase 설정 저장 실패:", error);
+      }
+    };
+    
+    // 1.5초 딜레이 (타이핑할 때마다 서버에 무리가 가지 않도록 모아서 전송)
+    const timer = setTimeout(() => saveSettingsToFirebase(), 1500); 
+    return () => clearTimeout(timer);
+  }, [factories, factoryDB, suppliers]);
   
   useEffect(() => { setCompareDraft(JSON.parse(JSON.stringify(distData))); }, [distData]); // distData 동기화
 
@@ -122,21 +101,39 @@ const App = () => {
     return () => clearTimeout(timer);
   }, [inputSearchInput]);
 
+  // ⭐️ 앱 실행 시 웹 서버에서 1~4번 DB 항목을 모두 불러옵니다.
+  // ⭐️ 앱 실행 시 Firebase 서버에서 설정값(1~3번)과 배정 이력(4번)을 모두 불러옵니다.
   useEffect(() => { 
-    const loadHistoryData = async () => {
+    const loadFirebaseData = async () => {
       try {
-        // ⭐️ 기존 동기식 localStorage 대신 비동기 대용량 DB로 읽어옵니다.
-        const p = await localforage.getItem('po_auto_assign_history'); 
-        if (p && Array.isArray(p)) {
-          setHistoryList(p.filter(h => h && typeof h === 'object').map(h => ({
-            id: h.id || `hist-${Math.random()}`, date: h.date || '', name: h.name || '이름 없음', data: h.data || {}
-          })));
+        setIsLoading(true);
+        
+        // 1. 공장 매핑, 우선순위, 공급업체 설정 불러오기
+        const settingsRef = doc(db, 'po_system', 'settings');
+        const settingsSnap = await getDoc(settingsRef);
+        
+        if (settingsSnap.exists()) {
+          const data = settingsSnap.data();
+          if (data.factoryDB) setFactoryDB(data.factoryDB);
+          if (data.factories) setFactories(data.factories);
+          if (data.suppliers) setSuppliers(data.suppliers);
         }
+
+        // 2. 이력 DB 불러오기 (최신순 20개만)
+        const q = query(collection(db, 'history'), orderBy('id', 'desc'), limit(20));
+        const historySnap = await getDocs(q);
+        const histData = historySnap.docs.map(doc => doc.data());
+        setHistoryList(histData);
+
       } catch (e) {
-        console.error("데이터베이스 로드 중 오류 발생:", e);
+        console.error("Firebase 로드 에러:", e);
+        alert("클라우드 DB에서 데이터를 불러오지 못했습니다. 네트워크를 확인해주세요.");
+      } finally {
+        setIsLoading(false);
       }
     };
-    loadHistoryData();
+    
+    loadFirebaseData();
   }, []);
 
   const cleanPN = str => String(str || '').replace(/[\s-]/g, '').toUpperCase();
@@ -182,30 +179,34 @@ const App = () => {
     }
   };
 
-  // ⭐️ 비동기(async) 방식으로 변경하여 대용량 데이터를 안전하게 저장합니다.
   const saveCurrentState = async (customName = null, currentData = null) => {
     const nameToSave = customName || newHistoryName;
     if (!nameToSave || !nameToSave.trim()) { alert("저장할 이름을 입력해주세요."); return; }
     
     const dataToSave = currentData || { backlogData, distData, poDistData, receivingData, factoryDB, factories, suppliers, results, itemSummary, updatedBacklog, detailResults };
     
+    // 고유 ID 생성 (Firebase 문서 이름으로 사용)
+    const newId = Date.now();
     const newEntry = { 
-      id: Date.now(), date: new Date().toLocaleString(), name: nameToSave, 
+      id: newId, 
+      date: new Date().toLocaleString(), 
+      name: nameToSave, 
       data: dataToSave 
     };
-    
-    // 용량이 넉넉하므로 최대 10개까지 이력을 보관합니다.
-    let updated = [newEntry, ...historyList].slice(0, 10); 
 
     try {
-      // JSON.stringify 없이 바로 저장 (localforage가 알아서 최적화 처리)
-      await localforage.setItem('po_auto_assign_history', updated);
-      setHistoryList(updated); 
+      setIsLoading(true);
+      // ⭐️ 'history' 컬렉션에 ID를 문서 이름으로 하여 Firebase에 단건 저장
+      await setDoc(doc(db, 'history', String(newId)), newEntry);
+      
+      setHistoryList([newEntry, ...historyList].slice(0, 20));
       setNewHistoryName('');
-      if (!customName) alert("대용량 데이터베이스에 안전하게 저장되었습니다.");
+      if (!customName) alert("클라우드 서버에 안전하게 저장되었습니다.");
     } catch (e) {
-      console.error(e);
-      alert("데이터 저장 중 오류가 발생했습니다. 브라우저 저장소 용량을 비워주세요.");
+      console.error("Firebase 저장 실패:", e);
+      alert("데이터 저장 중 오류가 발생했습니다.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -244,11 +245,20 @@ const App = () => {
   };
 
   // ⭐️ 삭제도 비동기 DB에 반영
+  // ⭐️ Firebase 클라우드 DB에서 항목 삭제
   const deleteState = async id => {
-    if(window.confirm("삭제하시겠습니까?")) {
-      const updated = historyList.filter(h => h.id !== id);
-      setHistoryList(updated); 
-      await localforage.setItem('po_auto_assign_history', updated);
+    if(window.confirm("클라우드 서버에서 완전히 삭제하시겠습니까?")) {
+      try {
+        setIsLoading(true);
+        // Firebase 문서 직접 삭제
+        await deleteDoc(doc(db, 'history', String(id)));
+        setHistoryList(historyList.filter(h => h.id !== id));
+      } catch (e) {
+        console.error("Firebase 삭제 오류:", e);
+        alert("삭제 중 오류가 발생했습니다.");
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
