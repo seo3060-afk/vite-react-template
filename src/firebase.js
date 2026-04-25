@@ -1,15 +1,20 @@
 // src/firebase.js
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+// getFirestore 대신 initializeFirestore를 불러옵니다.
+import { initializeFirestore } from "firebase/firestore"; 
 
 const firebaseConfig = {
-  apiKey: "본인의_API_KEY",
-  authDomain: "본인의_프로젝트.firebaseapp.com",
-  projectId: "본인의_프로젝트_ID",
-  storageBucket: "본인의_프로젝트.appspot.com",
-  messagingSenderId: "본인의_발송자ID",
-  appId: "본인의_APP_ID"
+  apiKey: "AIzaSyBXzvciioF4pDr8toK7WbGI2Y14AnDzdiA",
+  authDomain: "aeo-system.firebaseapp.com",
+  projectId: "aeo-system",
+  storageBucket: "aeo-system.firebasestorage.app",
+  messagingSenderId: "527118650104",
+  appId: "1:527118650104:web:0e21fc83270922819b090d"
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app); // 외부에서 DB에 접근할 수 있도록 내보냅니다.
+
+// ⭐️ 사내 방화벽 우회 설정: 웹소켓이 차단된 환경에서도 데이터를 주고받을 수 있게 강제 설정합니다.
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true
+});

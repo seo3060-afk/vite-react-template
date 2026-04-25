@@ -27,8 +27,7 @@ const App = () => {
   const [errorFilters, setErrorFilters] = useState({ shortage: false, distOverRecv: false, allocDiff: false }); 
   const [inlineAdj, setInlineAdj] = useState(null);
 
-  // ⭐️ 백엔드 서버 API 주소 (본인 서버 주소로 나중에 변경하세요)
-  const API_BASE_URL = 'https://본인의-웹서버-주소.com/api';
+
 
   // 서버에서 불러오기 전까지 빈 배열/기본값으로 세팅합니다.
   const [factoryDB, setFactoryDB] = useState([]); 
@@ -107,10 +106,18 @@ const App = () => {
     const loadFirebaseData = async () => {
       try {
         setIsLoading(true);
+
+        // ⭐️ 무한 로딩 방지: 5초 이상 응답이 없으면 강제로 에러를 발생시켜 로딩을 종료합니다.
+        const fetchWithTimeout = (promise, ms = 5000) => {
+            return Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 응답 지연 (방화벽 차단 의심)')), ms))
+            ]);
+        };
         
         // 1. 공장 매핑, 우선순위, 공급업체 설정 불러오기
         const settingsRef = doc(db, 'po_system', 'settings');
-        const settingsSnap = await getDoc(settingsRef);
+        const settingsSnap = await fetchWithTimeout(getDoc(settingsRef), 5000);
         
         if (settingsSnap.exists()) {
           const data = settingsSnap.data();
@@ -121,15 +128,16 @@ const App = () => {
 
         // 2. 이력 DB 불러오기 (최신순 20개만)
         const q = query(collection(db, 'history'), orderBy('id', 'desc'), limit(20));
-        const historySnap = await getDocs(q);
+        const historySnap = await fetchWithTimeout(getDocs(q), 5000);
         const histData = historySnap.docs.map(doc => doc.data());
         setHistoryList(histData);
 
       } catch (e) {
         console.error("Firebase 로드 에러:", e);
-        alert("클라우드 DB에서 데이터를 불러오지 못했습니다. 네트워크를 확인해주세요.");
+        // 사내 보안망 차단 시 로딩을 종료하고 로컬 모드로 전환 알림
+        alert("사내 보안망 또는 네트워크 문제로 클라우드 DB 연동이 지연되어 로컬 모드로 시작합니다.\n(기본 기능은 정상 동작합니다)");
       } finally {
-        setIsLoading(false);
+        setIsLoading(false); // ⭐️ 에러가 나든 성공하든 무조건 화면 잠금을 해제합니다.
       }
     };
     
@@ -185,26 +193,30 @@ const App = () => {
     
     const dataToSave = currentData || { backlogData, distData, poDistData, receivingData, factoryDB, factories, suppliers, results, itemSummary, updatedBacklog, detailResults };
     
-    // 고유 ID 생성 (Firebase 문서 이름으로 사용)
     const newId = Date.now();
     const newEntry = { 
-      id: newId, 
-      date: new Date().toLocaleString(), 
-      name: nameToSave, 
-      data: dataToSave 
+      id: newId, date: new Date().toLocaleString(), name: nameToSave, data: dataToSave 
     };
 
     try {
       setIsLoading(true);
-      // ⭐️ 'history' 컬렉션에 ID를 문서 이름으로 하여 Firebase에 단건 저장
-      await setDoc(doc(db, 'history', String(newId)), newEntry);
+      
+      const fetchWithTimeout = (promise, ms = 5000) => {
+          return Promise.race([
+              promise,
+              new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 응답 지연')), ms))
+          ]);
+      };
+
+      // ⭐️ 저장 시에도 5초 타임아웃 적용
+      await fetchWithTimeout(setDoc(doc(db, 'history', String(newId)), newEntry), 5000);
       
       setHistoryList([newEntry, ...historyList].slice(0, 20));
       setNewHistoryName('');
       if (!customName) alert("클라우드 서버에 안전하게 저장되었습니다.");
     } catch (e) {
       console.error("Firebase 저장 실패:", e);
-      alert("데이터 저장 중 오류가 발생했습니다.");
+      alert("클라우드 서버와 연결할 수 없어 저장이 취소되었습니다.\n(사내망 접근 차단 상태일 수 있습니다)");
     } finally {
       setIsLoading(false);
     }
