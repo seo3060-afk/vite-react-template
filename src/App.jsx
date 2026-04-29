@@ -15,6 +15,81 @@ const App = () => {
   const [locStock, setLocStock] = useState([]);      // 로케이션 재고
   const [outboundStock, setOutboundStock] = useState([]); // 출고 예정 재고
   const [inventoryResults, setInventoryResults] = useState([]); // 실사 결과 테이블 
+  const [inventoryResults, setInventoryResults] = useState([]); // 실사 결과 테이블 
+  const [infoRecords, setInfoRecords] = useState([]); // ⭐️ 신규: 정보레코드 데이터
+  const [infoRecordSearch, setInfoRecordSearch] = useState(''); // 정보레코드 검색어
+  const [isSyncing, setIsSyncing] = useState(false); // 동기화 상태 표시
+
+  // ⭐️ 신규: 정보레코드 데이터 파싱 (6개 컬럼 대응 및 '임시' 표시 로직)
+  const parseInfoRecordData = (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text');
+    if (!text) return;
+
+    withLoading(() => {
+      const rows = text.split('\n').filter(row => row.trim() !== '');
+      const parsed = rows.map(row => {
+        const cols = row.split('\t');
+        
+        // 값이 없거나 공백이면 "임시"로 표시하는 내부 함수
+        const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
+
+        return {
+          pn: cleanPN(cols[0]),               // 매칭용 (공백 제거)
+          rawPn: val(cols[0]),                // 유라품번 (하이픈 유지)
+          supplierPn: val(cols[1]),           // 업체품번
+          itemName: val(cols[2]),             // 품목
+          manufacturer: val(cols[3]),         // 제조사
+          moq: val(cols[4]),                  // MOQ
+          ppq: val(cols[5]),                  // PPQ
+          lastUpdated: new Date().toLocaleString()
+        };
+      }).filter(p => p.pn !== "임시");
+
+      // 기존 데이터와 병합 (유라품번 기준 최신 데이터 덮어쓰기)
+      setInfoRecords(prev => {
+        const combined = [...prev];
+        parsed.forEach(newItem => {
+          const idx = combined.findIndex(item => item.pn === newItem.pn);
+          if (idx > -1) combined[idx] = newItem;
+          else combined.push(newItem);
+        });
+        return combined;
+      });
+
+      alert(`${parsed.length}건의 데이터가 로컬에 반영되었습니다.\n반드시 [서버 동기화]를 눌러 클라우드에 저장하세요.`);
+    });
+  };
+
+  // ⭐️ 대용량(3만건) 대응: Firestore 배치 업로드 로직
+  const syncInfoRecordsToFirebase = async () => {
+    if (infoRecords.length === 0) return;
+    if (!window.confirm(`${infoRecords.length}건의 데이터를 클라우드 서버에 동기화하시겠습니까?\n(품번별로 개별 저장되어 대용량 처리가 가능합니다)`)) return;
+
+    try {
+      setIsSyncing(true);
+      const { writeBatch, doc } = await import("firebase/firestore");
+      
+      const batchSize = 500; // 파이어베이스 제한에 따라 500개씩 분할 업로드
+      for (let i = 0; i < infoRecords.length; i += batchSize) {
+        const batch = writeBatch(db);
+        const chunk = infoRecords.slice(i, i + batchSize);
+        
+        chunk.forEach(item => {
+          const itemRef = doc(db, 'info_records', item.pn); // info_records 컬렉션 사용
+          batch.set(itemRef, item);
+        });
+        
+        await batch.commit();
+      }
+      alert("정보레코드가 클라우드 서버에 안전하게 저장되었습니다.");
+    } catch (e) {
+      console.error(e);
+      alert("서버 동기화 중 오류가 발생했습니다.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   const [infoRecords, setInfoRecords] = useState([]); // ⭐️ 신규: 정보레코드 데이터
   const [infoRecordSearch, setInfoRecordSearch] = useState(''); // 정보레코드 검색어
   const [isSyncing, setIsSyncing] = useState(false); // 동기화 상태 표시
@@ -2005,8 +2080,8 @@ const App = () => {
             { id: 'db', label: '2. 기준정보 관리', icon: Link2, color: 'sky' },
             { id: 'results', label: '3. 배정 결과 리포트', icon: BarChart3, color: 'emerald' },
             { id: 'inventory', label: '4. 재고 실사 분석', icon: PackageCheck, color: 'orange' },
-            { id: 'info_record', label: '5. 정보레코드 관리 (Bulk)', icon: Database, color: 'purple' }, // ⭐️ 추가
-            { id: 'manual', label: '5. 사용 설명서', icon: Clipboard, color: 'rose' }
+            { id: 'info_record', label: '5. 정보레코드 관리 (New)', icon: Clipboard, color: 'purple' },
+            { id: 'manual', label: '6. 사용 설명서', icon: Monitor, color: 'rose' }
           ].map(tab => {
             const IconComponent = tab.icon;
             return (
@@ -2046,6 +2121,66 @@ const App = () => {
                 </div>
               </div>
             </div>
+
+
+            {activeTab === 'info_record' && (
+          <div className="flex flex-col h-full gap-6 animate-fade-in">
+            <div className="flex justify-between items-center bg-white p-6 rounded-3xl shadow-sm border border-slate-200 shrink-0">
+              <div className="flex flex-col gap-1">
+                <h3 className="text-xl font-black text-purple-800 uppercase italic">Information Record DB</h3>
+                <p className="text-xs font-bold text-slate-400">부품 마스터 정보 관리 (전체: {infoRecords.length.toLocaleString()}건)</p>
+              </div>
+              <div className="flex gap-3">
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-3 text-slate-400" />
+                  <input type="text" placeholder="품번으로 마스터 정보 검색..." value={infoRecordSearch} onChange={e => setInfoRecordSearch(e.target.value)} className="pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold outline-none focus:border-purple-500 w-64 shadow-inner" />
+                </div>
+                <button onClick={syncInfoRecordsToFirebase} disabled={isSyncing} className={`px-6 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all flex items-center gap-2 ${isSyncing ? 'bg-slate-400' : 'bg-purple-600 text-white hover:bg-purple-500 active:scale-95'}`}>
+                  {isSyncing ? <Loader2 className="animate-spin" size={14}/> : <RefreshCw size={14}/>}
+                  서버 동기화 (Partial Sync)
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col min-h-0">
+              <div onPaste={parseInfoRecordData} tabIndex={0} className="p-5 bg-purple-50 border-b border-purple-100 text-center cursor-pointer hover:bg-purple-100 transition-all outline-none group shrink-0">
+                <p className="text-[11px] font-black text-purple-700 uppercase tracking-widest">이곳을 클릭 후 엑셀 데이터를 붙여넣으세요 (Ctrl+V)</p>
+                <p className="text-[9px] text-purple-400 font-bold mt-1">[ 형식: 유라품번 / 업체품번 / 품목 / 제조사 / MOQ / PPQ ]</p>
+              </div>
+              <div className="flex-1 overflow-auto custom-scrollbar">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-slate-900 text-white sticky top-0 font-bold z-10">
+                    <tr>
+                      <th className="p-4">유라 품번</th>
+                      <th className="p-4 text-emerald-400">업체 품번</th>
+                      <th className="p-4">품목</th>
+                      <th className="p-4">제조사</th>
+                      <th className="p-4 text-center">MOQ</th>
+                      <th className="p-4 text-center">PPQ</th>
+                      <th className="p-4 text-right">업데이트 일자</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {infoRecords.filter(item => item.pn.includes(cleanPN(infoRecordSearch))).slice(0, 50).map((item) => (
+                      <tr key={item.pn} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 font-black">{item.rawPn}</td>
+                        <td className={`p-4 font-bold ${item.supplierPn === '임시' ? 'text-slate-300' : 'text-emerald-600'}`}>{item.supplierPn}</td>
+                        <td className={`p-4 ${item.itemName === '임시' ? 'text-slate-300' : 'font-bold text-slate-600'}`}>{item.itemName}</td>
+                        <td className={`p-4 ${item.manufacturer === '임시' ? 'text-slate-300' : 'font-black text-purple-700'}`}>{item.manufacturer}</td>
+                        <td className={`p-4 text-center ${item.moq === '임시' ? 'text-slate-300' : 'font-bold'}`}>{item.moq}</td>
+                        <td className={`p-4 text-center ${item.ppq === '임시' ? 'text-slate-300' : 'font-bold'}`}>{item.ppq}</td>
+                        <td className="p-4 text-right text-slate-400 font-mono text-[10px]">{item.lastUpdated}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {infoRecords.length > 50 && (
+                  <div className="p-4 text-center text-slate-400 font-bold text-[10px] bg-slate-50 italic">... 데이터가 많아 상위 50건만 표시 중입니다. 검색 기능을 이용하세요 ...</div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
             {activeTab === 'info_record' && (
           <div className="flex flex-col h-full gap-6 animate-fade-in">
