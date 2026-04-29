@@ -504,8 +504,8 @@ const App = () => {
   };
 
   // ⭐️ 재고 실사 관련 상태 확장
+  // ⭐️ 재고 실사 관련 상태 확장
   const [inventorySubTab, setInventorySubTab] = useState('summary'); // 'summary' 또는 'location'
-  const [inventoryResults, setInventoryResults] = useState([]); // 품번별 요약
   const [inventoryLocResults, setInventoryLocResults] = useState([]); // 로케이션별 상세
 
   // ⭐️ 재고 실사 실행 로직 (요약 및 로케이션별 상세 동시 산출)
