@@ -2123,62 +2123,76 @@ const App = () => {
           </div>
         )}
 
-        {activeTab === 'results' && results.length > 0 && (
-          <div className="space-y-6 animate-fade-in flex-1 flex flex-col min-h-0">
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-6 shrink-0">
-              <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-blue-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">총 입고량</span><p className="text-3xl font-black mt-2 tracking-tighter text-blue-700">{summaryCounts.totalReceived.toLocaleString()}</p></div>
-              <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-indigo-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">지시 배정 합계</span><p className="text-3xl font-black mt-2 tracking-tighter text-indigo-700">{summaryCounts.totalDist.toLocaleString()}</p></div>
-              <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-teal-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">자동 배정 합계</span><p className="text-3xl font-black mt-2 tracking-tighter text-teal-700">{summaryCounts.totalAuto.toLocaleString()}</p></div>
-              <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-slate-400 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">창고재고 (미배정)</span><p className="text-3xl font-black mt-2 tracking-tighter text-slate-600">{summaryCounts.totalWarehouse.toLocaleString()}</p></div>
-              <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-emerald-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">최종 배정 총량</span><p className="text-3xl font-black mt-2 tracking-tighter text-emerald-600">{summaryCounts.totalAllocated.toLocaleString()}</p></div>
-            </div>
-            
-            <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden flex flex-col flex-1 min-h-0">
-               <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 shrink-0">
-                 <div className="flex gap-2 p-1 bg-slate-200/50 rounded-xl">
-                    <button onClick={() => withLoading(() => setResultSubTab('summary'))} className={`px-5 py-2 rounded-lg font-black text-xs transition-all ${resultSubTab === 'summary' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>품목별 분석 요약</button>
-                    <button onClick={() => withLoading(() => setResultSubTab('detail'))} className={`px-5 py-2 rounded-lg font-black text-xs transition-all ${resultSubTab === 'detail' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>전체 배정 내역</button>
-                    <button onClick={() => withLoading(() => setResultSubTab('updatedBacklog'))} className={`px-5 py-2 rounded-lg font-black text-xs transition-all ${resultSubTab === 'updatedBacklog' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>잔여 발주대장 갱신 리포트</button>
-                 </div>
-                 
-                 <div className="flex items-center gap-3">
-                   {/* ⭐️ 신규: 3가지 직관적 에러 필터링 버튼 세트 */}
-                   <div className="flex gap-1.5 bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
-                       <span className="flex items-center text-[10px] font-black text-slate-400 mx-2"><AlertTriangle size={12} className="mr-1"/> 에러 필터:</span>
-                       <button onClick={() => setErrorFilters(p => ({...p, shortage: !p.shortage}))} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${errorFilters.shortage ? 'bg-rose-100 text-rose-700 border border-rose-300 shadow-inner' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}>PO 부족</button>
-                       <button onClick={() => setErrorFilters(p => ({...p, distOverRecv: !p.distOverRecv}))} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${errorFilters.distOverRecv ? 'bg-orange-100 text-orange-700 border border-orange-300 shadow-inner' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}>지시 초과</button>
-                       <button onClick={() => setErrorFilters(p => ({...p, allocDiff: !p.allocDiff}))} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${errorFilters.allocDiff ? 'bg-amber-100 text-amber-700 border border-amber-300 shadow-inner' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}>배정 차이</button>
+        {/* ⭐️ 배정결과 리포트 화면 (빈 화면 예외처리 포함) */}
+        {activeTab === 'results' && (
+          <div className="flex-1 flex flex-col min-h-0 h-full animate-fade-in">
+            {results.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center bg-white rounded-[2.5rem] border border-slate-200 shadow-sm m-2">
+                <div className="bg-slate-50 p-8 rounded-full mb-6 shadow-inner border border-slate-100">
+                  <BarChart3 size={64} className="text-slate-300" />
+                </div>
+                <h2 className="text-2xl font-black text-slate-800 uppercase tracking-widest mb-3">No Results Data</h2>
+                <p className="text-slate-500 font-bold text-sm bg-slate-50 px-6 py-3 rounded-xl border border-slate-100 flex items-center gap-2">
+                  우측 상단의 <span className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-sm text-xs font-black">자동 배정 실행</span> 버튼을 눌러 리포트를 생성해주세요.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6 flex-1 flex flex-col min-h-0">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 shrink-0">
+                  <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-blue-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">총 입고량</span><p className="text-3xl font-black mt-2 tracking-tighter text-blue-700">{summaryCounts.totalReceived.toLocaleString()}</p></div>
+                  <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-indigo-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">지시 배정 합계</span><p className="text-3xl font-black mt-2 tracking-tighter text-indigo-700">{summaryCounts.totalDist.toLocaleString()}</p></div>
+                  <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-teal-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">자동 배정 합계</span><p className="text-3xl font-black mt-2 tracking-tighter text-teal-700">{summaryCounts.totalAuto.toLocaleString()}</p></div>
+                  <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-slate-400 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">창고재고 (미배정)</span><p className="text-3xl font-black mt-2 tracking-tighter text-slate-600">{summaryCounts.totalWarehouse.toLocaleString()}</p></div>
+                  <div className="bg-white p-6 rounded-[2rem] border-l-[10px] border-emerald-500 shadow-sm transition-transform hover:-translate-y-1"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">최종 배정 총량</span><p className="text-3xl font-black mt-2 tracking-tighter text-emerald-600">{summaryCounts.totalAllocated.toLocaleString()}</p></div>
+                </div>
+                
+                <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden flex flex-col flex-1 min-h-0">
+                   <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 shrink-0">
+                     <div className="flex gap-2 p-1 bg-slate-200/50 rounded-xl">
+                        <button onClick={() => withLoading(() => setResultSubTab('summary'))} className={`px-5 py-2 rounded-lg font-black text-xs transition-all ${resultSubTab === 'summary' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>품목별 분석 요약</button>
+                        <button onClick={() => withLoading(() => setResultSubTab('detail'))} className={`px-5 py-2 rounded-lg font-black text-xs transition-all ${resultSubTab === 'detail' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>전체 배정 내역</button>
+                        <button onClick={() => withLoading(() => setResultSubTab('updatedBacklog'))} className={`px-5 py-2 rounded-lg font-black text-xs transition-all ${resultSubTab === 'updatedBacklog' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>잔여 발주대장 갱신 리포트</button>
+                     </div>
+                     
+                     <div className="flex items-center gap-3">
+                       <div className="flex gap-1.5 bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
+                           <span className="flex items-center text-[10px] font-black text-slate-400 mx-2"><AlertTriangle size={12} className="mr-1"/> 에러 필터:</span>
+                           <button onClick={() => setErrorFilters(p => ({...p, shortage: !p.shortage}))} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${errorFilters.shortage ? 'bg-rose-100 text-rose-700 border border-rose-300 shadow-inner' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}>PO 부족</button>
+                           <button onClick={() => setErrorFilters(p => ({...p, distOverRecv: !p.distOverRecv}))} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${errorFilters.distOverRecv ? 'bg-orange-100 text-orange-700 border border-orange-300 shadow-inner' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}>지시 초과</button>
+                           <button onClick={() => setErrorFilters(p => ({...p, allocDiff: !p.allocDiff}))} className={`px-4 py-1.5 rounded-lg text-[10px] font-black transition-all ${errorFilters.allocDiff ? 'bg-amber-100 text-amber-700 border border-amber-300 shadow-inner' : 'text-slate-500 bg-slate-50 hover:bg-slate-100'}`}>배정 차이</button>
+                       </div>
+                       
+                       <button 
+                         onClick={() => setShowAppendedOnly(!showAppendedOnly)}
+                         className={`px-4 py-2.5 rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all border ${showAppendedOnly ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'}`}
+                       >
+                         {showAppendedOnly ? '✅ 추가 내역만 보는 중' : '추가 내역만 보기'}
+                       </button>
+                       <div className="relative flex items-center mr-4">
+                         <Search size={14} className="absolute left-3 text-slate-400" />
+                         <input 
+                           type="text" 
+                           placeholder="품번 검색 후 Enter..." 
+                           value={searchInput}
+                           onChange={(e) => setSearchInput(e.target.value)}
+                           onKeyDown={(e) => e.key === 'Enter' && handleSearchEnter()}
+                           className="pl-9 pr-4 py-2.5 rounded-xl text-xs font-bold outline-none border border-slate-300 focus:border-indigo-500 shadow-sm w-64 bg-white"
+                         />
+                         {searchInput && <X size={14} className="absolute right-3 text-slate-400 cursor-pointer hover:text-slate-600" onClick={() => {setSearchInput(''); setSearchQuery('');}} />}
+                       </div>
+                       {resultSubTab === 'detail' && (<button onClick={exportDetailToExcel} className="px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 hover:bg-emerald-700 active:scale-95 uppercase tracking-tighter"><DownloadCloud size={14}/> 결과 엑셀복사</button>)}
+                       {resultSubTab === 'updatedBacklog' && (<button onClick={exportUpdatedBacklogToExcel} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 hover:bg-indigo-700 active:scale-95 uppercase tracking-tighter"><DownloadCloud size={14}/> 잔여 발주대장 엑셀복사</button>)}
+                     </div>
                    </div>
                    
-                   <button 
-                     onClick={() => setShowAppendedOnly(!showAppendedOnly)}
-                     className={`px-4 py-2.5 rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all border ${showAppendedOnly ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-white text-slate-500 border-slate-300 hover:bg-slate-50'}`}
-                   >
-                     {showAppendedOnly ? '✅ 추가 내역만 보는 중' : '추가 내역만 보기'}
-                   </button>
-                   <div className="relative flex items-center mr-4">
-                     <Search size={14} className="absolute left-3 text-slate-400" />
-                     <input 
-                       type="text" 
-                       placeholder="품번 검색 후 Enter..." 
-                       value={searchInput}
-                       onChange={(e) => setSearchInput(e.target.value)}
-                       onKeyDown={(e) => e.key === 'Enter' && handleSearchEnter()}
-                       className="pl-9 pr-4 py-2.5 rounded-xl text-xs font-bold outline-none border border-slate-300 focus:border-indigo-500 shadow-sm w-64 bg-white"
-                     />
-                     {searchInput && <X size={14} className="absolute right-3 text-slate-400 cursor-pointer hover:text-slate-600" onClick={() => {setSearchInput(''); setSearchQuery('');}} />}
+                   <div className="flex-1 overflow-auto select-text custom-scrollbar min-h-0 bg-white">
+                      {resultSubTab === 'summary' && memoizedSummaryTable}
+                      {resultSubTab === 'detail' && memoizedDetailTable}
+                      {resultSubTab === 'updatedBacklog' && memoizedUpdatedBacklogTable}
                    </div>
-                   {resultSubTab === 'detail' && (<button onClick={exportDetailToExcel} className="px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 hover:bg-emerald-700 active:scale-95 uppercase tracking-tighter"><DownloadCloud size={14}/> 결과 엑셀복사</button>)}
-                   {resultSubTab === 'updatedBacklog' && (<button onClick={exportUpdatedBacklogToExcel} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 hover:bg-indigo-700 active:scale-95 uppercase tracking-tighter"><DownloadCloud size={14}/> 잔여 발주대장 엑셀복사</button>)}
-                 </div>
-               </div>
-               
-               <div className="flex-1 overflow-auto select-text custom-scrollbar min-h-0 bg-white">
-                  {resultSubTab === 'summary' && memoizedSummaryTable}
-                  {resultSubTab === 'detail' && memoizedDetailTable}
-                  {resultSubTab === 'updatedBacklog' && memoizedUpdatedBacklogTable}
-               </div>
-            </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
