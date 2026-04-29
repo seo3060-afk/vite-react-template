@@ -469,7 +469,7 @@ const App = () => {
     });
   };
 
-  // ⭐️ 재고 실사 실행 로직
+  // ⭐️ 재고 실사 실행 로직 (하이픈 유지 + 정보레코드 마스터 연동 + 컬럼 재구성)
   const runInventoryAudit = () => {
     if (sapStock.length === 0 && locStock.length === 0) {
       alert("SAP 재고 또는 로케이션 재고 데이터를 먼저 입력해주세요.");
@@ -477,21 +477,44 @@ const App = () => {
     }
 
     withLoading(() => {
-      // 1. 모든 고유 품번 추출
+      // 1. 모든 고유 품번 추출 (매칭용 PN 기준)
       const allPNs = [...new Set([...sapStock.map(s => s.pn), ...locStock.map(l => l.pn)])];
 
       const report = allPNs.map(pn => {
+        // 2. SAP/Loc 데이터에서 원본 품번(하이픈 포함) 찾기
+        const sampleSap = sapStock.find(s => s.pn === pn);
+        const sampleLoc = locStock.find(l => l.pn === pn);
+        const displayPn = sampleSap?.rawPn || sampleLoc?.rawPn || pn; // ⭐️ 하이픈 유지
+
+        // 3. 정보레코드(Info Records)에서 마스터 정보 검색
+        const masterInfo = infoRecords.find(info => info.pn === pn);
+
+        // 4. 각 수량 계산
         const sapQty = sapStock.filter(s => s.pn === pn).reduce((acc, curr) => acc + curr.qty, 0);
         const locQty = locStock.filter(l => l.pn === pn).reduce((acc, curr) => acc + curr.qty, 0);
+        
+        const outItems = outboundStock.filter(o => o.pn === pn);
+        const outQty = outItems.reduce((acc, curr) => acc + curr.qty, 0); // 출고 대기 수량 합계
+        
         const diff = locQty - sapQty;
 
-        // 출고 예정 재고 확인
-        const outItems = outboundStock.filter(o => o.pn === pn);
+        // 5. 비고란 정보 구성
         const remark = outItems.length > 0 
-          ? outItems.map(o => `[${o.factory}] 공장 출고 대기자재 (${o.qty.toLocaleString()}개)`).join(' / ')
+          ? outItems.map(o => `[${o.factory}] 출고대기 (${o.qty.toLocaleString()}개)`).join(' / ')
           : '-';
 
-        return { pn, sapQty, locQty, diff, remark };
+        // 6. 요청하신 순서대로 데이터 구성
+        return {
+          itemName: masterInfo?.itemName || "임시",     // 품목
+          manufacturer: masterInfo?.manufacturer || "임시", // 제조사
+          rawPn: displayPn,                             // 유라품번 (하이픈 포함)
+          supplierPn: masterInfo?.supplierPn || "임시",  // 업체품번
+          sapQty: sapQty,                               // SAP 재고
+          locQty: locQty,                               // 로케이션 수량
+          outQty: outQty,                               // 출고 대기 수량
+          diff: diff,                                   // 차이 수량
+          remark: remark                                // 비고
+        };
       });
 
       setInventoryResults(report);
@@ -2051,33 +2074,42 @@ const App = () => {
                 재고 차이 분석 실행
               </button>
             </div>
-            <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
+            {/* 결과 테이블 */}
+            <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col min-h-0">
               <div className="px-6 py-4 bg-slate-900 text-white font-black text-sm flex justify-between items-center">
                 <span>재고 실사 분석 결과 리포트</span>
                 <button onClick={() => {
-                  const header = "품번\tSAP재고\t로케이션합계\t차이\t비고\n";
-                  const body = inventoryResults.map(r => `${r.pn}\t${r.sapQty}\t${r.locQty}\t${r.diff}\t${r.remark}`).join('\n');
+                  const header = "품목\t제조사\t유라품번\t업체품번\tSAP재고\t로케이션수량\t출고대기수량\t차이수량\t비고\n";
+                  const body = inventoryResults.map(r => `${r.itemName}\t${r.manufacturer}\t${r.rawPn}\t${r.supplierPn}\t${r.sapQty}\t${r.locQty}\t${r.outQty}\t${r.diff}\t${r.remark}`).join('\n');
                   copyToClipboard(header + body);
-                  alert("결과가 클립보드에 복사되었습니다.");
-                }} className="text-xs bg-slate-700 px-3 py-1 rounded hover:bg-slate-600">엑셀 복사</button>
+                  alert("리포트가 요청하신 순서대로 클립보드에 복사되었습니다.");
+                }} className="text-xs bg-emerald-600 px-4 py-1.5 rounded-lg hover:bg-emerald-500 font-bold shadow-sm transition-all">엑셀 전체 복사</button>
               </div>
               <div className="flex-1 overflow-auto custom-scrollbar">
                 <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-slate-100 sticky top-0 font-bold text-slate-600 border-b border-slate-200">
+                  <thead className="bg-slate-100 sticky top-0 font-bold text-slate-600 border-b border-slate-200 z-10 shadow-sm">
                     <tr>
-                      <th className="p-4">유라 품번</th>
+                      <th className="p-4">품목</th>
+                      <th className="p-4">제조사</th>
+                      <th className="p-4">유라 품번 (Pn)</th>
+                      <th className="p-4 text-emerald-600">업체 품번</th>
                       <th className="p-4 text-right">SAP 재고</th>
-                      <th className="p-4 text-right">로케이션 합계</th>
-                      <th className="p-4 text-right">차이 (Loc - SAP)</th>
+                      <th className="p-4 text-right">로케이션 수량</th>
+                      <th className="p-4 text-right text-orange-600">출고 대기 수량</th>
+                      <th className="p-4 text-right">차이 수량</th>
                       <th className="p-4">비고 (출고 예정 정보)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {inventoryResults.map((res, i) => (
                       <tr key={i} className="hover:bg-slate-50 transition-colors">
-                        <td className="p-4 font-black">{res.pn}</td>
-                        <td className="p-4 text-right font-mono">{res.sapQty.toLocaleString()}</td>
-                        <td className="p-4 text-right font-mono">{res.locQty.toLocaleString()}</td>
+                        <td className={`p-4 font-bold ${res.itemName === '임시' ? 'text-slate-300 italic' : 'text-slate-700'}`}>{res.itemName}</td>
+                        <td className={`p-4 ${res.manufacturer === '임시' ? 'text-slate-300' : 'font-bold text-purple-700'}`}>{res.manufacturer}</td>
+                        <td className="p-4 font-black text-slate-900">{res.rawPn}</td>
+                        <td className={`p-4 font-bold ${res.supplierPn === '임시' ? 'text-slate-300' : 'text-emerald-600'}`}>{res.supplierPn}</td>
+                        <td className="p-4 text-right font-mono text-slate-600">{res.sapQty.toLocaleString()}</td>
+                        <td className="p-4 text-right font-mono text-slate-600">{res.locQty.toLocaleString()}</td>
+                        <td className="p-4 text-right font-black text-orange-600 bg-orange-50/30">{res.outQty.toLocaleString()}</td>
                         <td className={`p-4 text-right font-black ${res.diff < 0 ? 'text-rose-600' : res.diff > 0 ? 'text-blue-600' : 'text-slate-400'}`}>
                           {res.diff > 0 ? `+${res.diff.toLocaleString()}` : res.diff.toLocaleString()}
                         </td>
@@ -2090,8 +2122,6 @@ const App = () => {
                 </table>
               </div>
             </div>
-          </div>
-        )}
 
         {activeTab === 'info_record' && (
           <div className="flex flex-col h-full gap-6 animate-fade-in">
