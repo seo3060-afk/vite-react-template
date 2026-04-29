@@ -21,7 +21,7 @@ const App = () => {
   const [infoRecordSearch, setInfoRecordSearch] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // ⭐️ 정보레코드 파싱 (6개 컬럼 대응 및 '임시' 표시 로직)
+  // ⭐️ 정보레코드 파싱 및 로컬 영구 저장 로직
   const parseInfoRecordData = (e) => {
     e.preventDefault();
     const text = e.clipboardData.getData('text');
@@ -34,13 +34,13 @@ const App = () => {
         const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
 
         return {
-          pn: cleanPN(cols[0]),               // 매칭용 (공백 제거)
-          rawPn: val(cols[0]),                // 유라품번 (하이픈 유지)
-          supplierPn: val(cols[1]),           // 업체품번
-          itemName: val(cols[2]),             // 품목
-          manufacturer: val(cols[3]),         // 제조사
-          moq: val(cols[4]),                  // MOQ
-          ppq: val(cols[5]),                  // PPQ
+          pn: cleanPN(cols[0]),               
+          rawPn: val(cols[0]),                
+          supplierPn: val(cols[1]),           
+          itemName: val(cols[2]),             
+          manufacturer: val(cols[3]),         
+          moq: val(cols[4]),                  
+          ppq: val(cols[5]),                  
           lastUpdated: new Date().toLocaleString()
         };
       }).filter(p => p.pn !== "임시");
@@ -52,17 +52,21 @@ const App = () => {
           if (idx > -1) combined[idx] = newItem;
           else combined.push(newItem);
         });
+        
+        // ⭐️ 핵심 픽스: 3만건의 데이터를 파이어베이스 요금 폭탄 없이 쓰기 위해 내 PC 브라우저 DB에 무료로 영구 저장합니다.
+        localforage.setItem('po_info_records', combined);
+        
         return combined;
       });
 
-      alert(`${parsed.length}건의 데이터가 로컬에 반영되었습니다.\n반드시 [서버 동기화]를 눌러 클라우드에 저장하세요.`);
+      alert(`${parsed.length}건의 데이터가 내 PC에 반영되었습니다.\n안전을 위해 [클라우드로 백업(업로드)] 버튼도 한 번 눌러주세요.`);
     });
   };
 
-  // ⭐️ 대용량(3만건) 대응: Firestore 배치 업로드 로직
+  // ⭐️ 클라우드 서버 동기화 (업로드)
   const syncInfoRecordsToFirebase = async () => {
     if (infoRecords.length === 0) return;
-    if (!window.confirm(`${infoRecords.length}건의 데이터를 클라우드 서버에 동기화하시겠습니까?\n(품번별로 개별 저장되어 대용량 처리가 가능합니다)`)) return;
+    if (!window.confirm(`${infoRecords.length}건의 데이터를 클라우드 서버에 백업(동기화)하시겠습니까?`)) return;
 
     try {
       setIsSyncing(true);
@@ -72,18 +76,42 @@ const App = () => {
       for (let i = 0; i < infoRecords.length; i += batchSize) {
         const batch = writeBatch(db);
         const chunk = infoRecords.slice(i, i + batchSize);
-        
         chunk.forEach(item => {
           const itemRef = doc(db, 'info_records', item.pn);
           batch.set(itemRef, item);
         });
-        
         await batch.commit();
       }
-      alert("정보레코드가 클라우드 서버에 안전하게 저장되었습니다.");
+      alert("정보레코드가 클라우드 서버에 안전하게 업로드되었습니다.");
     } catch (e) {
       console.error(e);
       alert("서버 동기화 중 오류가 발생했습니다.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // ⭐️ 신규: 클라우드 서버에서 내려받기 (PC 변경 시 사용)
+  const fetchInfoRecordsFromFirebase = async () => {
+    if (!window.confirm("클라우드 서버에서 3만 건의 마스터 정보를 내려받으시겠습니까?\n(대용량 통신이 발생하므로 PC를 바꿨거나 처음 세팅할 때만 권장합니다)")) return;
+    
+    try {
+      setIsSyncing(true);
+      const { collection, getDocs } = await import("firebase/firestore");
+      const querySnapshot = await getDocs(collection(db, 'info_records'));
+      const fetched = [];
+      querySnapshot.forEach((doc) => { fetched.push(doc.data()); });
+      
+      if (fetched.length > 0) {
+        setInfoRecords(fetched);
+        await localforage.setItem('po_info_records', fetched); // 내 PC에도 저장
+        alert(`${fetched.toLocaleString()}건의 마스터 정보를 성공적으로 내려받았습니다!`);
+      } else {
+        alert("서버에 저장된 마스터 정보가 없습니다.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("서버에서 데이터를 불러오지 못했습니다.");
     } finally {
       setIsSyncing(false);
     }
@@ -184,6 +212,12 @@ const App = () => {
   // ⭐️ 하이브리드 데이터 로드: 클라우드 실패 시 1초 만에 로컬 데이터로 자동 복구
   useEffect(() => { 
     const loadData = async () => {
+      // ⭐️ 픽스: 앱이 켜지자마자 내 PC에 저장해 둔 3만 건의 마스터 정보를 즉시 복구합니다.
+      try {
+        const storedRecords = await localforage.getItem('po_info_records');
+        if (storedRecords && Array.isArray(storedRecords)) setInfoRecords(storedRecords);
+      } catch (err) { console.error("로컬 마스터 정보 로드 실패", err); }
+
       try {
         setIsLoading(true);
 
@@ -1554,219 +1588,6 @@ const App = () => {
     </table>
   ), [filteredBacklog, sortConfigBacklog]);
 
-  // ⭐️ 완벽 픽스: 동기화(즉시 재계산) 기능 및 개별 확정 버튼이 포함된 수동 배정 모달
-  const renderCompareModal = () => {
-    if (!showCompareModal) return null;
-
-    const manualShortages = [];
-    compareDraft.forEach(d => {
-        const orig = distData.find(od => od.id === d.id) || d;
-        factories.forEach(f => {
-            if (f === '자동배정' || f === '납기대로' || f === '판매') return;
-            const instructed = orig.factoryAllocations[f] || 0;
-            const allocated = d.factoryAllocations[f] || 0;
-            if (instructed > allocated && !confirmedShortages.has(`${cleanPN(d.pn)}_${f}`)) {
-                manualShortages.push({ pn: d.pn, factory: f, instructed, allocated, shortage: instructed - allocated, origId: orig.id });
-            }
-        });
-    });
-
-    const currentAssignedTotal = Object.values(checkedPOQty).reduce((a, b) => a + (b.qty || 0), 0);
-    const currentRemainingShortage = selectedShortage ? (selectedShortage.shortage - currentAssignedTotal) : 0;
-
-    const handleCheckToggle = (r, isChecked, available) => {
-        const newChecked = { ...checkedPOQty };
-        if (isChecked) {
-            if (currentRemainingShortage <= 0) return;
-            newChecked[r.id] = { qty: Math.min(available, currentRemainingShortage), poNo: r.poNo, poItem: r.poItem };
-        } else {
-            delete newChecked[r.id];
-        }
-        setCheckedPOQty(newChecked);
-    };
-
-    const handleBatchAssign = () => {
-        const items = Object.values(checkedPOQty);
-        let updatedMappings = forcedPOMappings;
-        if (items.length > 0) {
-            const newMappings = items.map(item => ({
-                id: Date.now() + Math.random(),
-                yuraPN: selectedShortage.pn, poNo: item.poNo, poItem: item.poItem, qty: item.qty, targetFactory: selectedShortage.factory
-            }));
-            updatedMappings = [...forcedPOMappings, ...newMappings];
-            setForcedPOMappings(updatedMappings);
-        }
-        
-        const newConfirmed = new Set(confirmedShortages);
-        newConfirmed.add(`${cleanPN(selectedShortage.pn)}_${selectedShortage.factory}`);
-        setConfirmedShortages(newConfirmed);
-        
-        // ⭐️ 동기화 픽스: 확인을 누르는 즉시 배정 로직 재실행!
-        withLoading(() => executeAllocationWithDist(distData, updatedMappings, newConfirmed, manualAdjustments));
-        setSelectedShortage(null);
-        setCheckedPOQty({});
-    };
-
-    return (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[60] flex justify-center items-center p-6 animate-modal">
-            <div className="bg-white w-full max-w-4xl h-[85vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden border border-slate-200">
-                <div className="px-8 py-5 bg-rose-600 border-b border-rose-700 flex justify-between items-center shrink-0 shadow-sm z-10">
-                    <h3 className="text-xl font-black text-white flex items-center gap-3 tracking-tighter">
-                        <AlertTriangle size={24}/> 수동 배정 오류 (지시량 부족) 품목 확인
-                    </h3>
-                    <div className="flex items-center gap-4">
-                        <button onClick={() => setShowCompareModal(false)} className="p-2 text-rose-200 hover:text-white transition-colors bg-rose-700 rounded-lg"><X size={24} /></button>
-                    </div>
-                </div>
-                <div className="flex-1 overflow-auto custom-scrollbar p-8 bg-slate-50 relative">
-                    <div className="mb-4 flex items-center gap-2 text-xs font-bold text-slate-500">
-                        <span className="bg-indigo-100 text-indigo-700 px-2 py-1 rounded">💡 TIP</span>
-                        리스트의 품목을 <strong className="text-rose-600">더블 클릭</strong>하시면 다중 선택으로 PO를 가져오거나 창고로 이관할 수 있습니다.
-                    </div>
-                    {manualShortages.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-400">
-                            <span className="text-6xl mb-5">🎉</span>
-                            <p className="text-2xl font-black text-slate-600 tracking-tighter">수동 배정 오류가 없습니다!</p>
-                            <p className="text-sm font-bold mt-2 text-slate-400">발생한 수량 차이나 배정 오류가 존재하지 않거나 모두 처리되었습니다.</p>
-                        </div>
-                    ) : (
-                        <table className="w-full text-left text-[12px] whitespace-nowrap bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-200">
-                            <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0 shadow-sm">
-                                <tr>
-                                    <th className="p-4 border-b border-slate-200 w-1/3">YURA PN</th>
-                                    <th className="p-4 border-b border-slate-200 text-indigo-700">지시 공장</th>
-                                    <th className="p-4 text-right border-b border-slate-200">입력된 지시 수량</th>
-                                    <th className="p-4 text-right border-b border-slate-200">실제 배정 수량</th>
-                                    <th className="p-4 text-right border-b border-slate-200 text-rose-600 font-black">부족 수량 (오류)</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {manualShortages.map((s, idx) => (
-                                    <tr key={idx} className="hover:bg-rose-50 cursor-pointer transition-colors group" onDoubleClick={() => { setSelectedShortage(s); setCheckedPOQty({}); }}>
-                                        <td className="p-4 font-black text-slate-800 group-hover:text-rose-700">{s.pn}</td>
-                                        <td className="p-4 font-black text-indigo-600">{s.factory}</td>
-                                        <td className="p-4 text-right text-slate-500 font-bold">{s.instructed.toLocaleString()}</td>
-                                        <td className="p-4 text-right text-slate-500 font-bold">{s.allocated.toLocaleString()}</td>
-                                        <td className="p-4 text-right font-black text-rose-600 bg-rose-50/50">{s.shortage.toLocaleString()}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-            </div>
-
-            {selectedShortage && (
-                <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex justify-center items-center p-6 animate-modal">
-                    <div className="bg-white w-full max-w-6xl rounded-[2rem] shadow-2xl flex flex-col overflow-hidden border border-slate-200 max-h-[85vh]">
-                        <div className="px-8 py-5 bg-indigo-600 flex justify-between items-center shadow-md z-10 shrink-0">
-                            <h4 className="font-black text-white flex items-center gap-3 text-lg tracking-tighter">
-                                PO 다중 선택 및 가져오기: <span className="text-amber-300 ml-1">{selectedShortage.pn}</span> ➔ <span className="bg-white text-indigo-700 px-3 py-1 rounded-md text-sm">{selectedShortage.factory}</span>
-                                <span className="ml-4 text-sm bg-indigo-800 px-4 py-2 rounded-xl border border-indigo-400 shadow-inner">
-                                    상단 잔여 부족량: <span className={currentRemainingShortage === 0 ? "text-emerald-400" : "text-rose-400"}>{currentRemainingShortage.toLocaleString()}</span>개
-                                </span>
-                            </h4>
-                            <div className="flex items-center gap-3">
-                                {currentRemainingShortage > 0 && (
-                                    <button onClick={() => {
-                                        if(!window.confirm(`남은 잔량 ${currentRemainingShortage.toLocaleString()}개를 모두 창고재고로 이관 확정하시겠습니까?`)) return;
-                                        const newConfirmed = new Set(confirmedShortages);
-                                        newConfirmed.add(`${cleanPN(selectedShortage.pn)}_${selectedShortage.factory}`);
-                                        setConfirmedShortages(newConfirmed);
-                                        // ⭐️ 동기화 픽스: 확인을 누르는 즉시 배정 로직 재실행!
-                                        withLoading(() => executeAllocationWithDist(distData, forcedPOMappings, newConfirmed, manualAdjustments));
-                                        setSelectedShortage(null);
-                                    }} className="px-5 py-2.5 bg-rose-500 hover:bg-rose-400 text-white rounded-xl font-black shadow-md transition-all active:scale-95 flex items-center gap-2 border border-rose-400">
-                                        📦 남은 잔량 전체 창고 확정
-                                    </button>
-                                )}
-                                <button onClick={handleBatchAssign} className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl font-black shadow-md transition-all active:scale-95 flex items-center gap-2 border border-emerald-400">
-                                    ✓ 선택항목 일괄배정 실행
-                                </button>
-                                <button onClick={() => { setSelectedShortage(null); setCheckedPOQty({}); }} className="text-indigo-200 hover:text-white bg-indigo-700 p-2.5 rounded-lg transition-colors"><X size={20}/></button>
-                            </div>
-                        </div>
-                        <div className="p-8 bg-slate-50 flex-1 overflow-auto custom-scrollbar relative">
-                            <table className="w-full text-left text-[11px] whitespace-nowrap bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                                <thead className="bg-slate-100 text-slate-700 font-bold sticky top-0">
-                                    <tr>
-                                        <th className="p-3 border-b border-slate-200 text-center w-16">선택</th>
-                                        <th className="p-3 border-b border-slate-200">현재 위치(WMS)</th>
-                                        <th className="p-3 border-b border-slate-200">원본 출고처</th>
-                                        <th className="p-3 border-b border-slate-200">PO No</th>
-                                        <th className="p-3 border-b border-slate-200">항번</th>
-                                        <th className="p-3 border-b border-slate-200">납기</th>
-                                        <th className="p-3 text-right border-b border-slate-200 text-emerald-600">가용 잔량 (남은 PO)</th>
-                                        <th className="p-3 text-center border-b border-slate-200 text-slate-500">개별 액션</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    <tr className="bg-rose-50 hover:bg-rose-100 transition-colors border-b-2 border-rose-200 group">
-                                        <td className="p-3 text-center">-</td>
-                                        <td className="p-3 font-black text-slate-600 uppercase">미배정 잔량 창고이관</td>
-                                        <td className="p-3 font-bold text-slate-400">-</td>
-                                        <td className="p-3 font-mono text-slate-400">PO 없음(지시초과)</td>
-                                        <td className="p-3 font-bold text-slate-400">-</td>
-                                        <td className="p-3 font-bold text-slate-400">-</td>
-                                        <td className="p-3 text-right font-black text-rose-600 bg-rose-100/50 text-xs">
-                                            {currentRemainingShortage.toLocaleString()}
-                                        </td>
-                                        <td className="p-3 text-center">
-                                            <button 
-                                                onClick={() => {
-                                                    const newConfirmed = new Set(confirmedShortages);
-                                                    newConfirmed.add(`${cleanPN(selectedShortage.pn)}_${selectedShortage.factory}`);
-                                                    setConfirmedShortages(newConfirmed);
-                                                    // ⭐️ 동기화 픽스: 개별 버튼 클릭 시에도 즉시 재계산 및 연동!
-                                                    withLoading(() => executeAllocationWithDist(distData, forcedPOMappings, newConfirmed, manualAdjustments));
-                                                    setSelectedShortage(null);
-                                                }}
-                                                className="px-4 py-1.5 bg-slate-600 text-white rounded shadow hover:bg-slate-700 active:scale-95 font-black text-[10px] uppercase transition-all"
-                                            >
-                                                📦 확정 (창고)
-                                            </button>
-                                        </td>
-                                    </tr>
-
-                                    {results.filter(r => cleanPN(r.partNumber) === cleanPN(selectedShortage.pn) && (r.pendingQty - r.allocated) > 0 && !String(r.poNo).includes('PO 없음')).length === 0 ? (
-                                        <tr><td colSpan="8" className="p-12 text-center text-slate-400 font-bold text-sm">현재 가져올 수 있는 잔여 PO 물량이 없습니다. 상단 [확정]을 눌러 창고로 이관하세요.</td></tr>
-                                    ) : (
-                                        results.filter(r => cleanPN(r.partNumber) === cleanPN(selectedShortage.pn) && (r.pendingQty - r.allocated) > 0 && !String(r.poNo).includes('PO 없음')).sort(sortByDueDateAndPO).map(r => {
-                                            const available = r.pendingQty - r.allocated;
-                                            const isChecked = !!checkedPOQty[r.id];
-                                            const checkedAmount = isChecked ? checkedPOQty[r.id].qty : 0;
-
-                                            return (
-                                                <tr key={r.id} className={`transition-colors cursor-pointer ${isChecked ? 'bg-indigo-50/70 border-l-4 border-indigo-500' : 'hover:bg-slate-50'}`} onClick={() => handleCheckToggle(r, !isChecked, available)}>
-                                                    <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
-                                                        <input type="checkbox" checked={isChecked} onChange={e => handleCheckToggle(r, e.target.checked, available)} className="w-4 h-4 accent-indigo-600 cursor-pointer" />
-                                                    </td>
-                                                    <td className="p-3 font-black text-indigo-600 uppercase">{r.computedFactory}</td>
-                                                    <td className="p-3 font-bold text-slate-500">{r.dbLocation}</td>
-                                                    <td className="p-3 font-mono text-slate-600">{r.poNo}</td>
-                                                    <td className="p-3 font-bold">{r.poItem}</td>
-                                                    <td className="p-3 font-bold">{r.dueDate}</td>
-                                                    <td className="p-3 text-right font-black text-emerald-600 bg-emerald-50/30 text-xs">
-                                                        {available.toLocaleString()}
-                                                        {isChecked && <span className="block text-[9px] text-indigo-600 font-bold mt-0.5">(-{checkedAmount.toLocaleString()} 선택됨)</span>}
-                                                    </td>
-                                                    <td className="p-3 text-center">
-                                                        {isChecked ? <span className="text-indigo-600 font-black text-xs">선택됨</span> : <span className="text-slate-300">-</span>}
-                                                    </td>
-                                                </tr>
-                                            )
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-  };
-
   // Modal Render Functions
   const renderMissingDBModal = () => {
     if (!missingDBMapping) return null;
@@ -2122,6 +1943,8 @@ const App = () => {
                 </table>
               </div>
             </div>
+          </div>
+        )}
 
         {activeTab === 'info_record' && (
           <div className="flex flex-col h-full gap-6 animate-fade-in">
@@ -2135,10 +1958,15 @@ const App = () => {
                   <Search size={16} className="absolute left-3 top-3 text-slate-400" />
                   <input type="text" placeholder="품번으로 마스터 정보 검색..." value={infoRecordSearch} onChange={e => setInfoRecordSearch(e.target.value)} className="pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold outline-none focus:border-purple-500 w-64 shadow-inner" />
                 </div>
-                <button onClick={syncInfoRecordsToFirebase} disabled={isSyncing} className={`px-6 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all flex items-center gap-2 ${isSyncing ? 'bg-slate-400' : 'bg-purple-600 text-white hover:bg-purple-500 active:scale-95'}`}>
-                  {isSyncing ? <Loader2 className="animate-spin" size={14}/> : <RefreshCw size={14}/>}
-                  서버 동기화 (Partial Sync)
-                </button>
+                <div className="flex gap-2">
+                  <button onClick={fetchInfoRecordsFromFirebase} disabled={isSyncing} className={`px-4 py-2.5 rounded-xl font-black text-xs shadow-md transition-all flex items-center gap-2 ${isSyncing ? 'bg-slate-200 text-slate-400' : 'bg-white text-purple-700 border border-purple-200 hover:bg-purple-50 active:scale-95'}`}>
+                    <DownloadCloud size={14}/> 서버에서 내려받기
+                  </button>
+                  <button onClick={syncInfoRecordsToFirebase} disabled={isSyncing} className={`px-5 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all flex items-center gap-2 ${isSyncing ? 'bg-slate-400' : 'bg-purple-600 text-white hover:bg-purple-500 active:scale-95'}`}>
+                    {isSyncing ? <Loader2 className="animate-spin" size={14}/> : <RefreshCw size={14}/>}
+                    클라우드로 백업 (업로드)
+                  </button>
+                </div>
               </div>
             </div>
 
