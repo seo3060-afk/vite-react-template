@@ -9,144 +9,86 @@ const App = () => {
 
   const [activeTab, setActiveTab] = useState('input'); 
   const [resultSubTab, setResultSubTab] = useState('summary'); 
+  const [openAccordion, setOpenAccordion] = useState('po'); // ⭐️ 좌측 아코디언 메뉴 상태
   
   // ⭐️ 재고 실사 데이터 상태
   const [sapStock, setSapStock] = useState([]);
   const [locStock, setLocStock] = useState([]);
   const [outboundStock, setOutboundStock] = useState([]);
   const [inventoryResults, setInventoryResults] = useState([]);
+  const [inventorySubTab, setInventorySubTab] = useState('summary'); 
+  const [inventoryLocResults, setInventoryLocResults] = useState([]); 
 
   // ⭐️ 정보레코드 데이터 상태
   const [infoRecords, setInfoRecords] = useState([]);
   const [infoRecordSearch, setInfoRecordSearch] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // ⭐️ 정보레코드 파싱 및 로컬 영구 저장 로직
   const parseInfoRecordData = (e) => {
-    e.preventDefault();
-    const text = e.clipboardData.getData('text');
-    if (!text) return;
-
+    e.preventDefault(); const text = e.clipboardData.getData('text'); if (!text) return;
     withLoading(() => {
       const rows = text.split('\n').filter(row => row.trim() !== '');
       const parsed = rows.map(row => {
-        const cols = row.split('\t');
-        const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
-
-        return {
-          pn: cleanPN(cols[0]),               
-          rawPn: val(cols[0]),                
-          supplierPn: val(cols[1]),           
-          itemName: val(cols[2]),             
-          manufacturer: val(cols[3]),         
-          moq: val(cols[4]),                  
-          ppq: val(cols[5]),                  
-          lastUpdated: new Date().toLocaleString()
-        };
+        const cols = row.split('\t'); const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
+        return { pn: cleanPN(cols[0]), rawPn: val(cols[0]), supplierPn: val(cols[1]), itemName: val(cols[2]), manufacturer: val(cols[3]), moq: val(cols[4]), ppq: val(cols[5]), lastUpdated: new Date().toLocaleString() };
       }).filter(p => p.pn !== "임시");
-
       setInfoRecords(prev => {
         const combined = [...prev];
-        parsed.forEach(newItem => {
-          const idx = combined.findIndex(item => item.pn === newItem.pn);
-          if (idx > -1) combined[idx] = newItem;
-          else combined.push(newItem);
-        });
-        
-        // ⭐️ 핵심 픽스: 3만건의 데이터를 파이어베이스 요금 폭탄 없이 쓰기 위해 내 PC 브라우저 DB에 무료로 영구 저장합니다.
+        parsed.forEach(newItem => { const idx = combined.findIndex(item => item.pn === newItem.pn); if (idx > -1) combined[idx] = newItem; else combined.push(newItem); });
         localforage.setItem('po_info_records', combined);
-        
         return combined;
       });
-
       alert(`${parsed.length}건의 데이터가 내 PC에 반영되었습니다.\n안전을 위해 [클라우드로 백업(업로드)] 버튼도 한 번 눌러주세요.`);
     });
   };
 
-  // ⭐️ 클라우드 서버 동기화 (업로드)
   const syncInfoRecordsToFirebase = async () => {
     if (infoRecords.length === 0) return;
     if (!window.confirm(`${infoRecords.length}건의 데이터를 클라우드 서버에 백업(동기화)하시겠습니까?`)) return;
-
     try {
-      setIsSyncing(true);
-      const { writeBatch, doc } = await import("firebase/firestore");
-      
-      const batchSize = 500;
+      setIsSyncing(true); const { writeBatch, doc } = await import("firebase/firestore"); const batchSize = 500;
       for (let i = 0; i < infoRecords.length; i += batchSize) {
-        const batch = writeBatch(db);
-        const chunk = infoRecords.slice(i, i + batchSize);
-        chunk.forEach(item => {
-          const itemRef = doc(db, 'info_records', item.pn);
-          batch.set(itemRef, item);
-        });
+        const batch = writeBatch(db); const chunk = infoRecords.slice(i, i + batchSize);
+        chunk.forEach(item => { const itemRef = doc(db, 'info_records', item.pn); batch.set(itemRef, item); });
         await batch.commit();
       }
       alert("정보레코드가 클라우드 서버에 안전하게 업로드되었습니다.");
-    } catch (e) {
-      console.error(e);
-      alert("서버 동기화 중 오류가 발생했습니다.");
-    } finally {
-      setIsSyncing(false);
-    }
+    } catch (e) { alert("서버 동기화 중 오류가 발생했습니다."); } finally { setIsSyncing(false); }
   };
 
-  // ⭐️ 신규: 클라우드 서버에서 내려받기 (PC 변경 시 사용)
   const fetchInfoRecordsFromFirebase = async () => {
-    if (!window.confirm("클라우드 서버에서 3만 건의 마스터 정보를 내려받으시겠습니까?\n(대용량 통신이 발생하므로 PC를 바꿨거나 처음 세팅할 때만 권장합니다)")) return;
-    
+    if (!window.confirm("클라우드 서버에서 마스터 정보를 내려받으시겠습니까?")) return;
     try {
-      setIsSyncing(true);
-      const { collection, getDocs } = await import("firebase/firestore");
-      const querySnapshot = await getDocs(collection(db, 'info_records'));
-      const fetched = [];
+      setIsSyncing(true); const { collection, getDocs } = await import("firebase/firestore");
+      const querySnapshot = await getDocs(collection(db, 'info_records')); const fetched = [];
       querySnapshot.forEach((doc) => { fetched.push(doc.data()); });
-      
-      if (fetched.length > 0) {
-        setInfoRecords(fetched);
-        await localforage.setItem('po_info_records', fetched); // 내 PC에도 저장
-        alert(`${fetched.toLocaleString()}건의 마스터 정보를 성공적으로 내려받았습니다!`);
-      } else {
-        alert("서버에 저장된 마스터 정보가 없습니다.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("서버에서 데이터를 불러오지 못했습니다.");
-    } finally {
-      setIsSyncing(false);
-    }
+      if (fetched.length > 0) { setInfoRecords(fetched); await localforage.setItem('po_info_records', fetched); alert(`${fetched.toLocaleString()}건 완료!`); } 
+      else { alert("서버에 저장된 마스터 정보가 없습니다."); }
+    } catch (e) { alert("서버에서 데이터를 불러오지 못했습니다."); } finally { setIsSyncing(false); }
   };
+
   const [backlogData, setBacklogData] = useState([]);   
   const [distData, setDistData] = useState([]);         
   const [poDistData, setPoDistData] = useState([]); 
   const [receivingData, setReceivingData] = useState([]);
-  
   const [appendModal, setAppendModal] = useState({ isOpen: false, type: null, title: '' });
   const [appendInput, setAppendInput] = useState('');
-
   const [initialDistData, setInitialDistData] = useState([]); 
-  const [compareDraft, setCompareDraft] = useState([]); // ⭐️ 픽스: 화이트스크린의 원인이었던 변수 완벽 복구
+  const [compareDraft, setCompareDraft] = useState([]); 
   const [forcedPOMappings, setForcedPOMappings] = useState([]); 
   const [manualAdjustments, setManualAdjustments] = useState([]); 
   const [confirmedShortages, setConfirmedShortages] = useState(new Set()); 
-  
-  // ⭐️ 신규: 3가지 디테일 에러 필터링 및 인라인 수기 입력 상태
   const [errorFilters, setErrorFilters] = useState({ shortage: false, distOverRecv: false, allocDiff: false }); 
   const [inlineAdj, setInlineAdj] = useState(null);
 
-
-
-  // 서버에서 불러오기 전까지 빈 배열/기본값으로 세팅합니다.
   const [factoryDB, setFactoryDB] = useState([]); 
   const [factories, setFactories] = useState(['화성', '화성(항공)', '파이롯트', '청북', '청주', '경주', '강동', '하네스', '테크', '판매', '자동배정']);
   const [factoryLimits, setFactoryLimits] = useState({});
   const [suppliers, setSuppliers] = useState([]);
-
   const [results, setResults] = useState([]);            
   const [itemSummary, setItemSummary] = useState([]); 
   const [updatedBacklog, setUpdatedBacklog] = useState([]);
   const [detailResults, setDetailResults] = useState([]);
-
   const [selectedItem, setSelectedItem] = useState(null); 
   const [reallocatedPNs, setReallocatedPNs] = useState(new Set());
   const [missingDBMapping, setMissingDBMapping] = useState(null);
@@ -174,234 +116,169 @@ const App = () => {
   const [inputSearchQuery, setInputSearchQuery] = useState('');
   const [showAppendedOnly, setShowAppendedOnly] = useState(false); 
 
-
-  // ⭐️ 하이브리드 설정 저장: 사내망 차단 대비 로컬과 클라우드 동시 저장
   useEffect(() => { 
     if (factoryDB.length === 0 && suppliers.length === 0) return; 
-
     const saveSettings = async () => {
-      // 1. 사내망에서도 완벽 작동하도록 로컬 스토리지에 즉시 저장
       localStorage.setItem('po_factory_db_final', JSON.stringify(factoryDB));
       localStorage.setItem('po_factory_priority_final', JSON.stringify(factories));
       localStorage.setItem('po_suppliers_v9', JSON.stringify(suppliers));
-
-      // 2. 클라우드 연동 시도 (실패해도 에러 없이 조용히 넘어감)
-      try {
-        await setDoc(doc(db, 'po_system', 'settings'), { factoryDB, factories, suppliers });
-      } catch (error) {
-        console.log("사내망 차단: 클라우드 동기화 보류 (로컬에는 안전하게 저장됨)");
-      }
+      try { await setDoc(doc(db, 'po_system', 'settings'), { factoryDB, factories, suppliers }); } catch (error) {}
     };
-    
-    const timer = setTimeout(() => saveSettings(), 1500); 
-    return () => clearTimeout(timer);
+    const timer = setTimeout(() => saveSettings(), 1500); return () => clearTimeout(timer);
   }, [factories, factoryDB, suppliers]);
   
-  useEffect(() => { setCompareDraft(JSON.parse(JSON.stringify(distData))); }, [distData]); // distData 동기화
+  useEffect(() => { setCompareDraft(JSON.parse(JSON.stringify(distData))); }, [distData]);
+  useEffect(() => { const timer = setTimeout(() => setSearchQuery(searchInput), 250); return () => clearTimeout(timer); }, [searchInput]);
+  useEffect(() => { const timer = setTimeout(() => setInputSearchQuery(inputSearchInput), 250); return () => clearTimeout(timer); }, [inputSearchInput]);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setSearchQuery(searchInput), 250);
-    return () => clearTimeout(timer);
-  }, [searchInput]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setInputSearchQuery(inputSearchInput), 250);
-    return () => clearTimeout(timer);
-  }, [inputSearchInput]);
-
-  // ⭐️ 하이브리드 데이터 로드: 클라우드 실패 시 1초 만에 로컬 데이터로 자동 복구
   useEffect(() => { 
     const loadData = async () => {
-      // ⭐️ 픽스: 앱이 켜지자마자 내 PC에 저장해 둔 3만 건의 마스터 정보를 즉시 복구합니다.
       try {
         const storedRecords = await localforage.getItem('po_info_records');
         if (storedRecords && Array.isArray(storedRecords)) setInfoRecords(storedRecords);
-      } catch (err) { console.error("로컬 마스터 정보 로드 실패", err); }
+      } catch (err) {}
 
       try {
         setIsLoading(true);
-
-        const fetchWithTimeout = (promise, ms = 3000) => {
-            return Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 응답 지연')), ms)) ]);
-        };
+        const fetchWithTimeout = (promise, ms = 3000) => Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)) ]);
         
-        // 1. 클라우드 DB 연결 시도 (3초 타임아웃)
-        const settingsRef = doc(db, 'po_system', 'settings');
-        const settingsSnap = await fetchWithTimeout(getDoc(settingsRef), 3000);
-        
+        const settingsSnap = await fetchWithTimeout(getDoc(doc(db, 'po_system', 'settings')), 3000);
         if (settingsSnap.exists()) {
           const data = settingsSnap.data();
-          if (data.factoryDB) setFactoryDB(data.factoryDB);
-          if (data.factories) setFactories(data.factories);
-          if (data.suppliers) setSuppliers(data.suppliers);
+          if (data.factoryDB) setFactoryDB(data.factoryDB); if (data.factories) setFactories(data.factories); if (data.suppliers) setSuppliers(data.suppliers);
         }
 
-        const q = query(collection(db, 'history'), orderBy('id', 'desc'), limit(20));
-        const historySnap = await fetchWithTimeout(getDocs(q), 3000);
-        const histData = historySnap.docs.map(doc => doc.data());
-        setHistoryList(histData);
-
-      } catch (e) {
-        console.log("사내망 차단 감지: 로컬 모드로 전환합니다.", e);
-        alert("사내 보안망 차단으로 클라우드에 접속할 수 없습니다.\n내 PC에 저장된 기존 로컬 데이터로 자동 전환합니다.");
+        // ⭐️ 마이그레이션 및 파셜 로드 로직
+        let metaHistory = await localforage.getItem('po_history_meta');
+        if (!metaHistory) {
+            const oldHistory = await localforage.getItem('po_auto_assign_history');
+            if (oldHistory && Array.isArray(oldHistory)) {
+                metaHistory = oldHistory.map(h => ({ id: h.id, date: h.date, name: h.name }));
+                await localforage.setItem('po_history_meta', metaHistory);
+                for (const h of oldHistory) await localforage.setItem(`po_history_data_${h.id}`, h.data);
+            } else { metaHistory = []; }
+        }
         
-        // 2. 클라우드 실패 시, 기존에 쓰던 로컬 스토리지에서 데이터 완벽 복구
         try {
-          const fDB = localStorage.getItem('po_factory_db_final');
-          if (fDB) setFactoryDB(JSON.parse(fDB));
-
-          const fPri = localStorage.getItem('po_factory_priority_final');
-          if (fPri) setFactories(JSON.parse(fPri));
-
-          const sup = localStorage.getItem('po_suppliers_v9');
-          if (sup) setSuppliers(JSON.parse(sup));
-
-          const localHist = await localforage.getItem('po_auto_assign_history');
-          if (localHist && Array.isArray(localHist)) setHistoryList(localHist);
-        } catch(localErr) { console.error("로컬 데이터 로드 실패:", localErr); }
-        
-      } finally {
-        setIsLoading(false);
-      }
+            const q = query(collection(db, 'history'), orderBy('id', 'desc'), limit(20));
+            const historySnap = await fetchWithTimeout(getDocs(q), 3000);
+            if (!historySnap.empty) {
+                metaHistory = historySnap.docs.map(doc => doc.data());
+                await localforage.setItem('po_history_meta', metaHistory);
+            }
+        } catch(e) {}
+        setHistoryList(metaHistory || []);
+      } catch (e) {
+        try {
+          const fDB = localStorage.getItem('po_factory_db_final'); if (fDB) setFactoryDB(JSON.parse(fDB));
+          const fPri = localStorage.getItem('po_factory_priority_final'); if (fPri) setFactories(JSON.parse(fPri));
+          const sup = localStorage.getItem('po_suppliers_v9'); if (sup) setSuppliers(JSON.parse(sup));
+          const mHist = await localforage.getItem('po_history_meta'); if(mHist) setHistoryList(mHist);
+        } catch(localErr) {}
+      } finally { setIsLoading(false); }
     };
     loadData();
   }, []);
 
   const cleanPN = str => String(str || '').replace(/[\s-]/g, '').toUpperCase();
-  
   const parseDateSafe = (dateStr) => {
     if (!dateStr || dateStr === '-') return new Date(9999, 11, 31);
     const m = String(dateStr).match(/(\d{2,4})[-./](\d{1,2})[-./](\d{1,2})/);
-    if (m) {
-      let y = parseInt(m[1], 10);
-      if (y < 100) y += 2000;
-      return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[3], 10));
-    }
+    if (m) { let y = parseInt(m[1], 10); if (y < 100) y += 2000; return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[3], 10)); }
     return new Date(9999, 11, 31);
   };
-
-  const sortByDueDateAndPO = (a, b) => {
-    const dc = (a.dueDate || '').localeCompare(b.dueDate || '');
-    if (dc !== 0) return dc;
-    return (a.poNo || '').localeCompare(b.poNo || '', undefined, { numeric: true, sensitivity: 'base' });
-  };
-
-  const withLoading = fn => { 
-    setIsLoading(true); 
-    setTimeout(() => { 
-      try { 
-        fn(); 
-      } catch(err) {
-        console.error(err);
-        alert("데이터 처리 중 오류가 발생했습니다.\n" + err);
-      } finally {
-        setTimeout(() => setIsLoading(false), 50); 
-      }
-    }, 50); 
-  };
+  const sortByDueDateAndPO = (a, b) => { const dc = (a.dueDate || '').localeCompare(b.dueDate || ''); if (dc !== 0) return dc; return (a.poNo || '').localeCompare(b.poNo || '', undefined, { numeric: true, sensitivity: 'base' }); };
+  const withLoading = fn => { setIsLoading(true); setTimeout(() => { try { fn(); } catch(err) { alert("오류 발생:\n" + err); } finally { setTimeout(() => setIsLoading(false), 50); } }, 50); };
 
   const clearAll = () => {
-    if(window.confirm('현재 작업 중인 데이터를 모두 초기화하시겠습니까?\n(※ 저장된 이력 DB는 유지됩니다)')) {
-      withLoading(() => {
-        setBacklogData([]); setDistData([]); setReceivingData([]); setPoDistData([]);
-        setResults([]); setItemSummary([]); setUpdatedBacklog([]); setDetailResults([]);
-        setSelectedItem(null); setReallocatedPNs(new Set());
-      });
+    if(window.confirm('작업 중인 데이터를 모두 초기화하시겠습니까? (이력은 유지됨)')) {
+      withLoading(() => { setBacklogData([]); setDistData([]); setReceivingData([]); setPoDistData([]); setResults([]); setItemSummary([]); setUpdatedBacklog([]); setDetailResults([]); setSelectedItem(null); setReallocatedPNs(new Set()); });
     }
   };
 
+  // ⭐️ DB 파셜(Partial) 분할 저장 로직
   const saveCurrentState = async (customName = null, currentData = null) => {
     const nameToSave = customName || newHistoryName;
     if (!nameToSave || !nameToSave.trim()) { alert("저장할 이름을 입력해주세요."); return; }
     
     const dataToSave = currentData || { backlogData, distData, poDistData, receivingData, factoryDB, factories, suppliers, results, itemSummary, updatedBacklog, detailResults };
-    
     const newId = Date.now();
-    const newEntry = { id: newId, date: new Date().toLocaleString(), name: nameToSave, data: dataToSave };
-
-    // 화면 UI 먼저 업데이트 (반응속도 최적화)
-    const updatedHistory = [newEntry, ...historyList].slice(0, 20);
-    setHistoryList(updatedHistory);
-    setNewHistoryName('');
+    const metaEntry = { id: newId, date: new Date().toLocaleString(), name: nameToSave };
+    
+    const updatedMeta = [metaEntry, ...historyList].slice(0, 20);
+    setHistoryList(updatedMeta); setNewHistoryName('');
 
     try {
       setIsLoading(true);
-      
-      // 1. 대용량 로컬 DB에 무조건 저장 (사내망 안전 확보)
-      await localforage.setItem('po_auto_assign_history', updatedHistory);
+      await localforage.setItem('po_history_meta', updatedMeta);
+      await localforage.setItem(`po_history_data_${newId}`, dataToSave);
 
-      // 2. 클라우드 서버 저장 시도
-      const fetchWithTimeout = (promise, ms = 3000) => {
-          return Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 타임아웃')), ms)) ]);
-      };
-      await fetchWithTimeout(setDoc(doc(db, 'history', String(newId)), newEntry), 3000);
+      const fetchWithTimeout = (promise, ms = 4000) => Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)) ]);
       
-      if (!customName) alert("로컬 및 클라우드 서버에 안전하게 저장되었습니다.");
+      await fetchWithTimeout(setDoc(doc(db, 'history', String(newId)), metaEntry), 4000);
+      await fetchWithTimeout(setDoc(doc(db, 'history_data', `${newId}_input`), { backlogData: dataToSave.backlogData, distData: dataToSave.distData, poDistData: dataToSave.poDistData, receivingData: dataToSave.receivingData }), 4000);
+      await fetchWithTimeout(setDoc(doc(db, 'history_data', `${newId}_results`), { results: dataToSave.results, itemSummary: dataToSave.itemSummary, updatedBacklog: dataToSave.updatedBacklog, detailResults: dataToSave.detailResults }), 4000);
+      await fetchWithTimeout(setDoc(doc(db, 'history_data', `${newId}_settings`), { factoryDB: dataToSave.factoryDB, factories: dataToSave.factories, suppliers: dataToSave.suppliers }), 4000);
+      
+      if (!customName) alert("분할 최적화(Partial) 방식으로 안전하게 저장되었습니다.");
     } catch (e) {
-      console.log("클라우드 저장 차단됨:", e);
-      if (!customName) alert("사내망 차단으로 클라우드는 보류되었으나,\n[내 PC 로컬 DB]에는 안전하게 저장되었습니다!");
-    } finally {
-      setIsLoading(false);
-    }
+      if (!customName) alert("사내망 차단으로 클라우드는 보류되었으나, 내 PC에는 안전하게 저장되었습니다.");
+    } finally { setIsLoading(false); }
   };
 
   const autoSaveToHistory = (alertMessage, currentData = null) => {
-    const now = new Date();
-    const ds = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-    // saveCurrentState가 async로 바뀌었으므로 그냥 호출만 해둡니다.
+    const now = new Date(); const ds = `${now.getMonth()+1}/${now.getDate()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     saveCurrentState(`[자동저장] ${ds}`, currentData);
-    if(alertMessage) alert(`${alertMessage}\n(데이터가 히스토리에 자동 저장되었습니다)`);
+    if(alertMessage) alert(`${alertMessage}\n(데이터가 이력에 자동 저장되었습니다)`);
   };
 
-  const loadState = entry => {
-    if(window.confirm(`[${entry.name}] 데이터를 불러오시겠습니까?`)) {
-      withLoading(() => {
-        setBacklogData(entry.data.backlogData || []); setDistData(entry.data.distData || []);
-        setPoDistData(entry.data.poDistData || []); setReceivingData(entry.data.receivingData || []);
-        setFactoryDB(entry.data.factoryDB || []); 
-        setFactories((entry.data.factories || []).map(f => f === '납기대로' ? '자동배정' : f));
-        setSuppliers(entry.data.suppliers || []); 
-        
-        if (entry.data.results && entry.data.itemSummary && entry.data.results.length > 0) {
-            setResults(entry.data.results);
-            setItemSummary(entry.data.itemSummary);
-            setUpdatedBacklog(entry.data.updatedBacklog || []);
-            setDetailResults(entry.data.detailResults || []);
-            setActiveTab('results');
-            setResultSubTab('summary');
-        } else {
-            setResults([]); setItemSummary([]); setUpdatedBacklog([]); setDetailResults([]);
-            setActiveTab('input');
-        }
-        
-        setSelectedItem(null); setReallocatedPNs(new Set()); setShowHistoryModal(false);
-      });
-    }
-  };
-
-  // ⭐️ 하이브리드 삭제: 로컬 즉시 삭제 후 클라우드 동기화
-  const deleteState = async id => {
-    if(window.confirm("항목을 완전히 삭제하시겠습니까?")) {
-      const updatedHistory = historyList.filter(h => h.id !== id);
-      setHistoryList(updatedHistory); // 화면 즉시 반영
-
-      try {
-        setIsLoading(true);
-        // 1. 로컬 DB에서 삭제
-        await localforage.setItem('po_auto_assign_history', updatedHistory);
-
-        // 2. 클라우드에서 삭제 시도
-        const fetchWithTimeout = (promise, ms = 3000) => {
-            return Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)) ]);
-        };
-        await fetchWithTimeout(deleteDoc(doc(db, 'history', String(id))), 3000);
-
-      } catch (e) {
-        console.log("클라우드 삭제 지연됨 (로컬은 삭제 완료)");
-      } finally {
-        setIsLoading(false);
+  // ⭐️ DB 파셜(Partial) 조립 불러오기 로직
+  const loadState = async (entry) => {
+    if(!window.confirm(`[${entry.name}] 데이터를 불러오시겠습니까?`)) return;
+    setIsLoading(true);
+    try {
+      let fullData = await localforage.getItem(`po_history_data_${entry.id}`);
+      
+      if (!fullData) {
+         const fetchWithTimeout = (p, ms = 5000) => Promise.race([ p, new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), ms)) ]);
+         const [sIn, sRes, sSet] = await Promise.all([
+             fetchWithTimeout(getDoc(doc(db, 'history_data', `${entry.id}_input`)), 5000),
+             fetchWithTimeout(getDoc(doc(db, 'history_data', `${entry.id}_results`)), 5000),
+             fetchWithTimeout(getDoc(doc(db, 'history_data', `${entry.id}_settings`)), 5000)
+         ]);
+         if (sIn.exists() && sRes.exists() && sSet.exists()) {
+             fullData = { ...sIn.data(), ...sRes.data(), ...sSet.data() };
+             await localforage.setItem(`po_history_data_${entry.id}`, fullData); 
+         } else throw new Error("서버에 데이터가 없습니다.");
       }
-    }
+
+      setBacklogData(fullData.backlogData || []); setDistData(fullData.distData || []); setPoDistData(fullData.poDistData || []); setReceivingData(fullData.receivingData || []);
+      setFactoryDB(fullData.factoryDB || []); setFactories((fullData.factories || []).map(f => f === '납기대로' ? '자동배정' : f)); setSuppliers(fullData.suppliers || []); 
+      if (fullData.results && fullData.itemSummary && fullData.results.length > 0) {
+          setResults(fullData.results); setItemSummary(fullData.itemSummary); setUpdatedBacklog(fullData.updatedBacklog || []); setDetailResults(fullData.detailResults || []);
+          setActiveTab('results'); setResultSubTab('summary'); setOpenAccordion('po');
+      } else {
+          setResults([]); setItemSummary([]); setUpdatedBacklog([]); setDetailResults([]);
+          setActiveTab('input'); setOpenAccordion('po');
+      }
+      setSelectedItem(null); setReallocatedPNs(new Set()); setShowHistoryModal(false);
+    } catch(err) { alert("불러오기 실패: " + err.message); } finally { setIsLoading(false); }
+  };
+
+  const deleteState = async id => {
+    if(!window.confirm("항목을 완전히 삭제하시겠습니까?")) return;
+    const updated = historyList.filter(h => h.id !== id);
+    setHistoryList(updated); 
+    try {
+      setIsLoading(true);
+      await localforage.setItem('po_history_meta', updated);
+      await localforage.removeItem(`po_history_data_${id}`);
+      const fetchWithTimeout = (p, ms = 3000) => Promise.race([ p, new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), ms)) ]);
+      await fetchWithTimeout(deleteDoc(doc(db, 'history', String(id))), 3000);
+      await fetchWithTimeout(deleteDoc(doc(db, 'history_data', `${id}_input`)), 3000);
+      await fetchWithTimeout(deleteDoc(doc(db, 'history_data', `${id}_results`)), 3000);
+      await fetchWithTimeout(deleteDoc(doc(db, 'history_data', `${id}_settings`)), 3000);
+    } catch (e) {} finally { setIsLoading(false); }
   };
 
   const addFactory = () => { if (!newFactoryName || factories.includes(newFactoryName)) return; setFactories([...factories, newFactoryName]); setNewFactoryName(''); };
@@ -503,7 +380,7 @@ const App = () => {
     });
   };
 
-  // ⭐️ 재고 실사 관련 상태 확장
+ 
   // ⭐️ 재고 실사 관련 상태 확장
   const [inventorySubTab, setInventorySubTab] = useState('summary'); // 'summary' 또는 'location'
   const [inventoryLocResults, setInventoryLocResults] = useState([]); // 로케이션별 상세
@@ -1822,7 +1699,7 @@ const App = () => {
 
   // --- 컴포넌트 렌더링 로직 ---
   return (
-    <div className="h-screen bg-slate-50 font-sans text-slate-800 flex flex-col overflow-hidden">
+    <div className="h-screen bg-slate-50 font-sans text-slate-800 flex overflow-hidden">
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 10px; }
@@ -1856,12 +1733,7 @@ const App = () => {
                          💡 <strong>누적 입력 모드:</strong> 입력하신 데이터는 기존 항목을 지우지 않고 <strong className="text-rose-600">추가분으로 누적 반영</strong>됩니다.<br/>
                          {appendModal.type === 'recv' ? "* 형식: YURA PN, 수량(Qty) (2열 탭 복사)" : "* 형식: YURA PN, 업체품번, Total, 각 공장 분배량들, Stock (N열 탭 복사)"}
                       </p>
-                      <textarea 
-                          className="w-full h-64 p-4 border border-slate-300 rounded-xl outline-none focus:border-indigo-500 text-[10px] custom-scrollbar leading-relaxed font-mono select-text" 
-                          placeholder="여기에 엑셀 데이터를 붙여넣으세요 (Ctrl+V)..."
-                          value={appendInput}
-                          onChange={(e) => setAppendInput(e.target.value)}
-                      />
+                      <textarea className="w-full h-64 p-4 border border-slate-300 rounded-xl outline-none focus:border-indigo-500 text-[10px] custom-scrollbar leading-relaxed font-mono select-text" placeholder="여기에 엑셀 데이터를 붙여넣으세요 (Ctrl+V)..." value={appendInput} onChange={(e) => setAppendInput(e.target.value)} />
                       <div className="flex justify-end gap-2 mt-2">
                           <button className="px-5 py-2.5 bg-slate-200 text-slate-700 font-bold rounded-xl text-xs hover:bg-slate-300" onClick={() => setAppendModal({isOpen:false, type:null, title:''})}>취소</button>
                           <button className="px-5 py-2.5 bg-indigo-600 text-white font-black rounded-xl text-xs shadow hover:bg-indigo-700" onClick={handleAppendSave}>저장 및 누적 추가</button>
@@ -1871,44 +1743,57 @@ const App = () => {
           </div>
       )}
 
-      <header className="bg-slate-900 border-b border-slate-800 shrink-0 z-30 shadow-xl h-24 flex items-center">
-        <div className="max-w-[1900px] mx-auto px-10 w-full flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <div className="bg-indigo-600 p-3 rounded-xl text-white shadow-lg"><Monitor size={28} /></div>
-            <div>
-              <h1 className="text-xl font-black text-white tracking-tighter leading-none uppercase">PO 자동 배정 프로그램</h1>
-              <div className="flex items-center gap-2 mt-1.5"><span className="text-[10px] font-bold text-slate-400 tracking-widest uppercase italic">SlicerPro Logic v10.5 Stable</span><span className="text-[10px] text-indigo-400 font-black px-2 py-0.5 bg-indigo-500/10 rounded-full">제작: 슬라이서프로</span></div>
+      {/* ⭐️ 좌측 아코디언 사이드바 */}
+      <aside className="w-64 flex-shrink-0 bg-slate-900 text-slate-300 flex flex-col shadow-2xl z-40 relative">
+          <div className="p-6 border-b border-slate-800 flex items-center gap-3 shrink-0">
+              <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg"><Monitor size={22}/></div>
+              <div>
+                 <h1 className="font-black text-white leading-tight uppercase tracking-tighter">SlicerPro</h1>
+                 <p className="text-[9px] text-indigo-400 font-bold tracking-widest uppercase">PO System v10.5</p>
+              </div>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar py-4">
+              <div className="mb-2">
+                  <button onClick={() => setOpenAccordion(p => p === 'po' ? '' : 'po')} className={`w-full flex items-center justify-between px-6 py-4 transition-colors ${openAccordion === 'po' ? 'bg-slate-800/80 text-white' : 'hover:bg-slate-800 hover:text-white'}`}>
+                      <span className="font-black text-xs flex items-center gap-2.5"><Database size={14}/> 1. PO 자동 배정</span>
+                      {openAccordion === 'po' ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                  </button>
+                  {openAccordion === 'po' && (
+                      <div className="bg-slate-800/30 py-2 flex flex-col gap-1 shadow-inner">
+                          <button onClick={() => setActiveTab('input')} className={`text-left pl-12 pr-6 py-2.5 text-[11px] font-bold transition-all flex items-center gap-2 ${activeTab === 'input' ? 'text-indigo-400 bg-slate-800 border-r-4 border-indigo-500' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}>데이터 입력</button>
+                          <button onClick={() => setActiveTab('results')} className={`text-left pl-12 pr-6 py-2.5 text-[11px] font-bold transition-all flex items-center gap-2 ${activeTab === 'results' ? 'text-indigo-400 bg-slate-800 border-r-4 border-indigo-500' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}>배정결과 리포트</button>
+                          <button onClick={() => setActiveTab('db')} className={`text-left pl-12 pr-6 py-2.5 text-[11px] font-bold transition-all flex items-center gap-2 ${activeTab === 'db' ? 'text-indigo-400 bg-slate-800 border-r-4 border-indigo-500' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}`}>PO 배정 설정</button>
+                      </div>
+                  )}
+              </div>
+              <button onClick={() => { setActiveTab('inventory'); setOpenAccordion(''); }} className={`w-full flex items-center gap-2.5 px-6 py-4 text-xs font-black transition-all ${activeTab === 'inventory' ? 'bg-indigo-600 text-white shadow-lg border-r-4 border-indigo-300' : 'hover:bg-slate-800 hover:text-white'}`}><PackageCheck size={14}/> 2. 재고 실사 분석</button>
+              <button onClick={() => { setActiveTab('info_record'); setOpenAccordion(''); }} className={`w-full flex items-center gap-2.5 px-6 py-4 text-xs font-black transition-all ${activeTab === 'info_record' ? 'bg-purple-600 text-white shadow-lg border-r-4 border-purple-300' : 'hover:bg-slate-800 hover:text-white'}`}><Clipboard size={14}/> 3. 정보레코드 관리</button>
+              <button onClick={() => { setActiveTab('manual'); setOpenAccordion(''); }} className={`w-full flex items-center gap-2.5 px-6 py-4 text-xs font-black transition-all ${activeTab === 'manual' ? 'bg-rose-600 text-white shadow-lg border-r-4 border-rose-300' : 'hover:bg-slate-800 hover:text-white'}`}><FileSpreadsheet size={14}/> 4. 사용 설명서</button>
+          </div>
+          <div className="p-4 border-t border-slate-800 text-center">
+              <p className="text-[9px] text-slate-500 font-black tracking-widest uppercase">© SlicerPro Logic</p>
+          </div>
+      </aside>
+
+      {/* 우측 메인 컨텐츠 영역 */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50">
+        <header className="bg-white border-b border-slate-200 shrink-0 z-30 shadow-sm h-16 flex items-center justify-between px-8">
+            <h2 className="text-lg font-black text-slate-800 tracking-tighter uppercase italic text-indigo-900 drop-shadow-sm">
+                {activeTab === 'input' && 'PO 데이터 입력 센터'}
+                {activeTab === 'results' && 'PO 배정 결과 리포트'}
+                {activeTab === 'db' && 'PO 배정 기준정보 설정'}
+                {activeTab === 'inventory' && '재고 실사 분석 시스템'}
+                {activeTab === 'info_record' && '부품 마스터 정보레코드 관리'}
+                {activeTab === 'manual' && '시스템 가이드 & 사용 설명서'}
+            </h2>
+            <div className="flex items-center gap-3">
+              <button onClick={() => setShowHistoryModal(true)} className="px-5 py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all text-xs flex items-center gap-2 border border-slate-200"><History size={14}/> 일자별 DB 관리</button>
+              <button onClick={clearAll} className="px-5 py-2.5 rounded-xl font-bold text-slate-400 hover:text-slate-600 transition-all text-xs border border-slate-200 hover:border-slate-400 uppercase tracking-widest bg-white">Reset Work</button>
+              <button onClick={() => withLoading(processAllocation)} className={`px-10 py-2.5 rounded-xl font-black shadow-lg transition-all active:scale-95 text-xs ${backlogData.length > 0 ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}>자동 배정 실행</button>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => setShowHistoryModal(true)} className="px-5 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold hover:bg-slate-700 hover:text-white transition-all text-xs flex items-center gap-2 border border-slate-700"><History size={14}/> 일자별 DB 관리</button>
-            <button onClick={clearAll} className="px-5 py-2.5 rounded-xl font-bold text-slate-400 hover:text-white transition-all text-xs border border-slate-700 hover:border-slate-500 uppercase tracking-widest">Reset Work</button>
-            <button onClick={() => withLoading(processAllocation)} className={`px-10 py-3 rounded-xl font-black shadow-xl transition-all active:scale-95 text-sm ${backlogData.length > 0 ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-500/40' : 'bg-slate-800 text-slate-600 cursor-not-allowed'}`}>자동 배정 실행</button>
-          </div>
-        </div>
-      </header>
-
-      <nav className="max-w-[1900px] mx-auto px-10 flex gap-2 pt-4 shrink-0 w-full z-20 relative">
-          {[
-            { id: 'input', label: '1. PO 데이터 입력', icon: Database, color: 'indigo' },
-            { id: 'db', label: '2. 기준정보 관리', icon: Link2, color: 'sky' },
-            { id: 'results', label: '3. 배정 결과 리포트', icon: BarChart3, color: 'emerald' },
-            { id: 'inventory', label: '4. 재고 실사 분석', icon: PackageCheck, color: 'orange' },
-            { id: 'info_record', label: '5. 정보레코드 관리 (New)', icon: Clipboard, color: 'purple' },
-            { id: 'manual', label: '6. 사용 설명서', icon: Monitor, color: 'rose' }
-          ].map(tab => {
-            const IconComponent = tab.icon;
-            return (
-              <button key={tab.id} onClick={() => withLoading(() => setActiveTab(tab.id))} 
-                className={`flex items-center gap-2.5 px-8 py-4 font-black text-xs rounded-t-xl transition-all border-b-4 ${activeTab === tab.id ? `bg-white border-${tab.color}-500 text-${tab.color}-700 shadow-sm` : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
-                <IconComponent size={16} />
-                {tab.label}
-              </button>
-            );
-          })}
-      </nav>
-
-      <main className={`max-w-[1900px] mx-auto p-6 w-full flex-1 flex flex-col min-h-0 animate-fade-in ${activeTab === 'results' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+        </header>
+    
+        <main className={`flex-1 overflow-y-auto p-6 flex flex-col min-h-0 relative ${activeTab === 'results' ? 'overflow-hidden' : ''}`}>
 
         {activeTab === 'inventory' && (
           <div className="flex flex-col h-full gap-6 animate-fade-in">
@@ -2299,6 +2184,95 @@ const App = () => {
             </div>
           </div>
         )}
+
+        {/* ⭐️ 신규: 상세 사용 설명서 (메뉴얼) */}
+        {activeTab === 'manual' && (
+          <div className="bg-white rounded-[2rem] border border-slate-200 shadow-xl p-8 overflow-auto custom-scrollbar h-full flex flex-col gap-8 animate-fade-in text-slate-700">
+            <div className="border-b border-slate-200 pb-6 shrink-0">
+               <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Monitor className="text-indigo-600"/> 📖 SlicerPro PO 자동 배정 시스템 사용 가이드</h2>
+               <p className="text-sm font-bold text-slate-500 mt-2">초보자도 쉽게 따라 할 수 있는 단계별 사용 설명서입니다. 본 시스템은 엑셀 데이터를 복사/붙여넣기(Ctrl+C, Ctrl+V) 하여 대량의 물류 배정 작업을 클릭 한 번에 처리합니다.</p>
+            </div>
+
+            <div className="space-y-8 flex-1">
+               {/* Step 1 */}
+               <section className="bg-indigo-50/50 p-6 rounded-2xl border border-indigo-100">
+                  <h3 className="text-lg font-black text-indigo-800 mb-3 flex items-center gap-2"><span className="bg-indigo-600 text-white w-6 h-6 rounded-full flex justify-center items-center text-xs">1</span> 기초 설정 (PO 배정 설정 탭)</h3>
+                  <div className="text-sm leading-relaxed space-y-2">
+                     <p>배정을 실행하기 전, <strong>'PO 배정 설정'</strong> 메뉴에서 각 공장 및 부품사별 조건을 세팅해야 합니다.</p>
+                     <ul className="list-disc pl-5 space-y-1 font-bold text-slate-600">
+                        <li><strong>Factory Mapping DB:</strong> 국가/차종과 원본 출고처를 WMS 공장명으로 자동 매칭시킵니다. <span className="text-rose-500">(D+일 출고제한 및 당월납기 통제 가능)</span></li>
+                        <li><strong>Priority Config:</strong> 각 공장에 분배할 때 우선적으로 채워 넣을 공장의 <strong>우선순위</strong>를 위아래로 드래그하여 설정합니다.</li>
+                        <li><strong>Supplier DB:</strong> 부품사별 납기 제한(D+)이나 배정 제외 처리를 관리합니다.</li>
+                     </ul>
+                  </div>
+               </section>
+
+               {/* Step 2 */}
+               <section className="bg-sky-50/50 p-6 rounded-2xl border border-sky-100">
+                  <h3 className="text-lg font-black text-sky-800 mb-3 flex items-center gap-2"><span className="bg-sky-600 text-white w-6 h-6 rounded-full flex justify-center items-center text-xs">2</span> 데이터 입력 (데이터 입력 탭)</h3>
+                  <div className="text-sm leading-relaxed space-y-3">
+                     <p>ERP나 엑셀 파일의 데이터를 각 항목에 맞게 복사(Ctrl+C) 후, 시스템의 네모난 점선 영역을 클릭하고 붙여넣기(Ctrl+V) 하세요.</p>
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                            <p className="font-black text-blue-700 mb-1">1. 입고 내역 (2열)</p>
+                            <p className="text-xs text-slate-500">형식: <code className="bg-slate-100 px-1 rounded">YURA PN | 수량</code></p>
+                            <p className="text-[11px] mt-1 text-slate-400">당일 창고에 입고된 부품들의 총수량을 뜻합니다.</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                            <p className="font-black text-indigo-700 mb-1">2. 발주 대장 (11열)</p>
+                            <p className="text-xs text-slate-500 text-balance">형식: <code className="bg-slate-100 px-1 rounded">국가차종 | 부품사 | PN | 업체품번 | PO | 항번 | 납기 | 주문 | 출고 | 미결 | 가용재고</code></p>
+                            <p className="text-[11px] mt-1 text-slate-400">시스템이 배정할 대상이 되는 목표 PO 목록입니다.</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                            <p className="font-black text-emerald-700 mb-1">3. 분배 지시 (N열)</p>
+                            <p className="text-xs text-slate-500">형식: <code className="bg-slate-100 px-1 rounded">PN | 업체품번 | Total | 공장A | 공장B ... | Stock</code></p>
+                            <p className="text-[11px] mt-1 text-slate-400 text-rose-500 font-bold">* PO지시량과 중복되지 않도록 주의 바랍니다.</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                            <p className="font-black text-purple-700 mb-1">4. PO 분배 지시 (4열)</p>
+                            <p className="text-xs text-slate-500">형식: <code className="bg-slate-100 px-1 rounded">YURA PN | PO No | 항번 | 수량</code></p>
+                            <p className="text-[11px] mt-1 text-slate-400">일반 지시보다 우선하여 <strong>0순위로 강제 지정</strong>되는 수량입니다.</p>
+                        </div>
+                     </div>
+                  </div>
+               </section>
+
+               {/* Step 3 */}
+               <section className="bg-emerald-50/50 p-6 rounded-2xl border border-emerald-100">
+                  <h3 className="text-lg font-black text-emerald-800 mb-3 flex items-center gap-2"><span className="bg-emerald-600 text-white w-6 h-6 rounded-full flex justify-center items-center text-xs">3</span> 배정 실행 및 리포트 분석</h3>
+                  <div className="text-sm leading-relaxed space-y-2">
+                     <p>우측 상단의 <strong>[자동 배정 실행]</strong> 버튼을 누르면 다음과 같은 로직으로 배분됩니다.</p>
+                     <ul className="list-decimal pl-5 space-y-1 font-bold text-slate-600 bg-white p-4 rounded-xl shadow-sm">
+                        <li><strong>PO 강제 지정:</strong> PO 분배 지시에 있는 항목을 가장 먼저 채웁니다.</li>
+                        <li><strong>특수 공장 로직:</strong> <span className="text-indigo-600">'화성(항공)'</span> 지시 수량은 이름에 '항공'이 포함된 PO를 우선적으로 찾아 모두 끌어다 씁니다.</li>
+                        <li><strong>일반 지시 및 자동 배정:</strong> 사용자가 설정한 우선순위와 납기제한(D+), 당월 조건에 맞는 PO만 선별하여 남은 미결량을 채웁니다.</li>
+                        <li><strong>에러 검출:</strong> 배정 후 <span className="text-rose-500">PO 부족</span>, <span className="text-orange-500">지시 초과</span> 현상이 발생하면 화면에 표시되며, 상세 내역 창(돋보기 아이콘)에서 타 공장 PO나 창고재고로 직접 <strong>수기 이관(재배정)</strong> 할 수 있습니다.</li>
+                     </ul>
+                  </div>
+               </section>
+
+               {/* Step 4 & 5 */}
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <section className="bg-orange-50/50 p-6 rounded-2xl border border-orange-100">
+                    <h3 className="text-lg font-black text-orange-800 mb-3 flex items-center gap-2"><span className="bg-orange-600 text-white w-6 h-6 rounded-full flex justify-center items-center text-xs">4</span> 재고 실사 분석</h3>
+                    <div className="text-sm text-slate-600 font-bold space-y-2 leading-relaxed">
+                       <p>SAP 전산 재고와 실제 창고(로케이션) 재고의 차이를 클릭 한 번으로 비교합니다.</p>
+                       <p><strong>출고 예정(대기) 수량</strong>까지 고려하여 비고란에 자동으로 표시해주며, 로케이션별로 몇 개의 실물이 분산되어 있는지 상세 현황판을 통해 확인할 수 있습니다.</p>
+                    </div>
+                 </section>
+                 
+                 <section className="bg-purple-50/50 p-6 rounded-2xl border border-purple-100">
+                    <h3 className="text-lg font-black text-purple-800 mb-3 flex items-center gap-2"><span className="bg-purple-600 text-white w-6 h-6 rounded-full flex justify-center items-center text-xs">5</span> 정보레코드 관리 및 DB 저장</h3>
+                    <div className="text-sm text-slate-600 font-bold space-y-2 leading-relaxed">
+                       <p>3만 건이 넘는 부품 마스터 정보를 <strong>내 PC에 무료로 영구 저장</strong>하며, 필요시 클라우드에 백업할 수 있습니다.</p>
+                       <p className="text-indigo-600">또한 배정 작업 내역은 우측 상단 <strong>[일자별 DB 관리]</strong> 버튼을 통해 분할 최적화(Partial) 방식으로 용량 제한 없이 안전하게 자동 저장/불러오기가 가능합니다.</p>
+                    </div>
+                 </section>
+               </div>
+            </div>
+          </div>
+        )}
+      
       </main>
 
       {renderMissingDBModal()}
@@ -2309,6 +2283,7 @@ const App = () => {
       <footer className="text-center p-8 bg-slate-900/5 mt-auto shrink-0 border-t border-slate-200/50">
         <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.4em] italic shadow-white">Produced by SlicerPro Logic Engine Optimized v10.5 Stable</p>
       </footer>
+      </div>
     </div>
   );
 };
