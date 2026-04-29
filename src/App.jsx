@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Clipboard, FileSpreadsheet, Box, Database, BarChart3, Settings2, X, Plus, Monitor, GripHorizontal, Search, DownloadCloud, AlertTriangle, History, Save, FolderDown, Trash2, Link2, Loader2, ChevronUp, ChevronDown, Users, RefreshCw } from 'lucide-react';
+import { Clipboard, FileSpreadsheet, Box, Database, BarChart3, Settings2, X, Plus, Monitor, GripHorizontal, Search, DownloadCloud, AlertTriangle, History, Save, FolderDown, Trash2, Link2, Loader2, ChevronUp, ChevronDown, Users, RefreshCw, PackageCheck } from 'lucide-react';
 import localforage from 'localforage';
 import { db } from './firebase';
 import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, query, orderBy, limit } from 'firebase/firestore';
@@ -7,7 +7,14 @@ import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, query, orderBy, li
 const App = () => {
   useEffect(() => { document.title = "PO 자동 배정 프로그램 - 슬라이서프로"; }, []);
 
+  // 기존 탭 상태에 'inventory' 추가
   const [activeTab, setActiveTab] = useState('input'); 
+  
+  // ⭐️ 신규: 재고 실사 데이터 상태
+  const [sapStock, setSapStock] = useState([]);      // SAP 재고
+  const [locStock, setLocStock] = useState([]);      // 로케이션 재고
+  const [outboundStock, setOutboundStock] = useState([]); // 출고 예정 재고
+  const [inventoryResults, setInventoryResults] = useState([]); // 실사 결과 테이블 
   const [resultSubTab, setResultSubTab] = useState('summary'); 
   const [backlogData, setBacklogData] = useState([]);   
   const [distData, setDistData] = useState([]);         
@@ -68,23 +75,25 @@ const App = () => {
   const [showAppendedOnly, setShowAppendedOnly] = useState(false); 
 
 
-  // ⭐️ 설정값(공장, 우선순위, 공급업체)이 변경될 때마다 Firebase 서버에 자동 저장
+  // ⭐️ 하이브리드 설정 저장: 사내망 차단 대비 로컬과 클라우드 동시 저장
   useEffect(() => { 
-    // 최초 앱 실행 시 빈 값으로 서버 데이터를 덮어쓰는 것을 방지
     if (factoryDB.length === 0 && suppliers.length === 0) return; 
 
-    const saveSettingsToFirebase = async () => {
+    const saveSettings = async () => {
+      // 1. 사내망에서도 완벽 작동하도록 로컬 스토리지에 즉시 저장
+      localStorage.setItem('po_factory_db_final', JSON.stringify(factoryDB));
+      localStorage.setItem('po_factory_priority_final', JSON.stringify(factories));
+      localStorage.setItem('po_suppliers_v9', JSON.stringify(suppliers));
+
+      // 2. 클라우드 연동 시도 (실패해도 에러 없이 조용히 넘어감)
       try {
-        await setDoc(doc(db, 'po_system', 'settings'), { 
-          factoryDB, factories, suppliers 
-        });
+        await setDoc(doc(db, 'po_system', 'settings'), { factoryDB, factories, suppliers });
       } catch (error) {
-        console.error("Firebase 설정 저장 실패:", error);
+        console.log("사내망 차단: 클라우드 동기화 보류 (로컬에는 안전하게 저장됨)");
       }
     };
     
-    // 1.5초 딜레이 (타이핑할 때마다 서버에 무리가 가지 않도록 모아서 전송)
-    const timer = setTimeout(() => saveSettingsToFirebase(), 1500); 
+    const timer = setTimeout(() => saveSettings(), 1500); 
     return () => clearTimeout(timer);
   }, [factories, factoryDB, suppliers]);
   
@@ -100,24 +109,19 @@ const App = () => {
     return () => clearTimeout(timer);
   }, [inputSearchInput]);
 
-  // ⭐️ 앱 실행 시 웹 서버에서 1~4번 DB 항목을 모두 불러옵니다.
-  // ⭐️ 앱 실행 시 Firebase 서버에서 설정값(1~3번)과 배정 이력(4번)을 모두 불러옵니다.
+  // ⭐️ 하이브리드 데이터 로드: 클라우드 실패 시 1초 만에 로컬 데이터로 자동 복구
   useEffect(() => { 
-    const loadFirebaseData = async () => {
+    const loadData = async () => {
       try {
         setIsLoading(true);
 
-        // ⭐️ 무한 로딩 방지: 5초 이상 응답이 없으면 강제로 에러를 발생시켜 로딩을 종료합니다.
-        const fetchWithTimeout = (promise, ms = 5000) => {
-            return Promise.race([
-                promise,
-                new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 응답 지연 (방화벽 차단 의심)')), ms))
-            ]);
+        const fetchWithTimeout = (promise, ms = 3000) => {
+            return Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 응답 지연')), ms)) ]);
         };
         
-        // 1. 공장 매핑, 우선순위, 공급업체 설정 불러오기
+        // 1. 클라우드 DB 연결 시도 (3초 타임아웃)
         const settingsRef = doc(db, 'po_system', 'settings');
-        const settingsSnap = await fetchWithTimeout(getDoc(settingsRef), 5000);
+        const settingsSnap = await fetchWithTimeout(getDoc(settingsRef), 3000);
         
         if (settingsSnap.exists()) {
           const data = settingsSnap.data();
@@ -126,22 +130,35 @@ const App = () => {
           if (data.suppliers) setSuppliers(data.suppliers);
         }
 
-        // 2. 이력 DB 불러오기 (최신순 20개만)
         const q = query(collection(db, 'history'), orderBy('id', 'desc'), limit(20));
-        const historySnap = await fetchWithTimeout(getDocs(q), 5000);
+        const historySnap = await fetchWithTimeout(getDocs(q), 3000);
         const histData = historySnap.docs.map(doc => doc.data());
         setHistoryList(histData);
 
       } catch (e) {
-        console.error("Firebase 로드 에러:", e);
-        // 사내 보안망 차단 시 로딩을 종료하고 로컬 모드로 전환 알림
-        alert("사내 보안망 또는 네트워크 문제로 클라우드 DB 연동이 지연되어 로컬 모드로 시작합니다.\n(기본 기능은 정상 동작합니다)");
+        console.log("사내망 차단 감지: 로컬 모드로 전환합니다.", e);
+        alert("사내 보안망 차단으로 클라우드에 접속할 수 없습니다.\n내 PC에 저장된 기존 로컬 데이터로 자동 전환합니다.");
+        
+        // 2. 클라우드 실패 시, 기존에 쓰던 로컬 스토리지에서 데이터 완벽 복구
+        try {
+          const fDB = localStorage.getItem('po_factory_db_final');
+          if (fDB) setFactoryDB(JSON.parse(fDB));
+
+          const fPri = localStorage.getItem('po_factory_priority_final');
+          if (fPri) setFactories(JSON.parse(fPri));
+
+          const sup = localStorage.getItem('po_suppliers_v9');
+          if (sup) setSuppliers(JSON.parse(sup));
+
+          const localHist = await localforage.getItem('po_auto_assign_history');
+          if (localHist && Array.isArray(localHist)) setHistoryList(localHist);
+        } catch(localErr) { console.error("로컬 데이터 로드 실패:", localErr); }
+        
       } finally {
-        setIsLoading(false); // ⭐️ 에러가 나든 성공하든 무조건 화면 잠금을 해제합니다.
+        setIsLoading(false);
       }
     };
-    
-    loadFirebaseData();
+    loadData();
   }, []);
 
   const cleanPN = str => String(str || '').replace(/[\s-]/g, '').toUpperCase();
@@ -194,29 +211,29 @@ const App = () => {
     const dataToSave = currentData || { backlogData, distData, poDistData, receivingData, factoryDB, factories, suppliers, results, itemSummary, updatedBacklog, detailResults };
     
     const newId = Date.now();
-    const newEntry = { 
-      id: newId, date: new Date().toLocaleString(), name: nameToSave, data: dataToSave 
-    };
+    const newEntry = { id: newId, date: new Date().toLocaleString(), name: nameToSave, data: dataToSave };
+
+    // 화면 UI 먼저 업데이트 (반응속도 최적화)
+    const updatedHistory = [newEntry, ...historyList].slice(0, 20);
+    setHistoryList(updatedHistory);
+    setNewHistoryName('');
 
     try {
       setIsLoading(true);
       
-      const fetchWithTimeout = (promise, ms = 5000) => {
-          return Promise.race([
-              promise,
-              new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 응답 지연')), ms))
-          ]);
-      };
+      // 1. 대용량 로컬 DB에 무조건 저장 (사내망 안전 확보)
+      await localforage.setItem('po_auto_assign_history', updatedHistory);
 
-      // ⭐️ 저장 시에도 5초 타임아웃 적용
-      await fetchWithTimeout(setDoc(doc(db, 'history', String(newId)), newEntry), 5000);
+      // 2. 클라우드 서버 저장 시도
+      const fetchWithTimeout = (promise, ms = 3000) => {
+          return Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('네트워크 타임아웃')), ms)) ]);
+      };
+      await fetchWithTimeout(setDoc(doc(db, 'history', String(newId)), newEntry), 3000);
       
-      setHistoryList([newEntry, ...historyList].slice(0, 20));
-      setNewHistoryName('');
-      if (!customName) alert("클라우드 서버에 안전하게 저장되었습니다.");
+      if (!customName) alert("로컬 및 클라우드 서버에 안전하게 저장되었습니다.");
     } catch (e) {
-      console.error("Firebase 저장 실패:", e);
-      alert("클라우드 서버와 연결할 수 없어 저장이 취소되었습니다.\n(사내망 접근 차단 상태일 수 있습니다)");
+      console.log("클라우드 저장 차단됨:", e);
+      if (!customName) alert("사내망 차단으로 클라우드는 보류되었으나,\n[내 PC 로컬 DB]에는 안전하게 저장되었습니다!");
     } finally {
       setIsLoading(false);
     }
@@ -256,18 +273,25 @@ const App = () => {
     }
   };
 
-  // ⭐️ 삭제도 비동기 DB에 반영
-  // ⭐️ Firebase 클라우드 DB에서 항목 삭제
+  // ⭐️ 하이브리드 삭제: 로컬 즉시 삭제 후 클라우드 동기화
   const deleteState = async id => {
-    if(window.confirm("클라우드 서버에서 완전히 삭제하시겠습니까?")) {
+    if(window.confirm("항목을 완전히 삭제하시겠습니까?")) {
+      const updatedHistory = historyList.filter(h => h.id !== id);
+      setHistoryList(updatedHistory); // 화면 즉시 반영
+
       try {
         setIsLoading(true);
-        // Firebase 문서 직접 삭제
-        await deleteDoc(doc(db, 'history', String(id)));
-        setHistoryList(historyList.filter(h => h.id !== id));
+        // 1. 로컬 DB에서 삭제
+        await localforage.setItem('po_auto_assign_history', updatedHistory);
+
+        // 2. 클라우드에서 삭제 시도
+        const fetchWithTimeout = (promise, ms = 3000) => {
+            return Promise.race([ promise, new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)) ]);
+        };
+        await fetchWithTimeout(deleteDoc(doc(db, 'history', String(id))), 3000);
+
       } catch (e) {
-        console.error("Firebase 삭제 오류:", e);
-        alert("삭제 중 오류가 발생했습니다.");
+        console.log("클라우드 삭제 지연됨 (로컬은 삭제 완료)");
       } finally {
         setIsLoading(false);
       }
@@ -342,6 +366,57 @@ const App = () => {
         else if (type === 'poDist') setPoDistData(parsed);
         else if (type === 'recv') setReceivingData(parsed);
       } catch (err) { alert("데이터 변환 오류."); }
+    });
+  };
+  
+// ⭐️ 재고 실사 데이터 파싱 (탭 구분)
+  const parseInventoryData = (e, type) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text');
+    if (!text) return;
+
+    withLoading(() => {
+      const rows = text.split('\n').filter(row => row.trim() !== '');
+      const parsed = rows.map((row, index) => {
+        const cols = row.split('\t');
+        if (type === 'sap') return { pn: cleanPN(cols[0]), qty: parseInt(cols[1]?.replace(/,/g, '')) || 0 };
+        if (type === 'loc') return { loc: cols[0]?.trim(), pn: cleanPN(cols[1]), qty: parseInt(cols[2]?.replace(/,/g, '')) || 0 };
+        if (type === 'out') return { factory: cols[0]?.trim(), pn: cleanPN(cols[1]), qty: parseInt(cols[2]?.replace(/,/g, '')) || 0 };
+        return null;
+      }).filter(Boolean);
+
+      if (type === 'sap') setSapStock(parsed);
+      else if (type === 'loc') setLocStock(parsed);
+      else if (type === 'out') setOutboundStock(parsed);
+    });
+  };
+
+  // ⭐️ 재고 실사 실행 로직
+  const runInventoryAudit = () => {
+    if (sapStock.length === 0 && locStock.length === 0) {
+      alert("SAP 재고 또는 로케이션 재고 데이터를 먼저 입력해주세요.");
+      return;
+    }
+
+    withLoading(() => {
+      // 1. 모든 고유 품번 추출
+      const allPNs = [...new Set([...sapStock.map(s => s.pn), ...locStock.map(l => l.pn)])];
+
+      const report = allPNs.map(pn => {
+        const sapQty = sapStock.filter(s => s.pn === pn).reduce((acc, curr) => acc + curr.qty, 0);
+        const locQty = locStock.filter(l => l.pn === pn).reduce((acc, curr) => acc + curr.qty, 0);
+        const diff = locQty - sapQty;
+
+        // 출고 예정 재고 확인
+        const outItems = outboundStock.filter(o => o.pn === pn);
+        const remark = outItems.length > 0 
+          ? outItems.map(o => `[${o.factory}] 공장 출고 대기자재 (${o.qty.toLocaleString()}개)`).join(' / ')
+          : '-';
+
+        return { pn, sapQty, locQty, diff, remark };
+      });
+
+      setInventoryResults(report);
     });
   };
 
@@ -493,9 +568,10 @@ const App = () => {
                    let finalLoc = isConfirmed ? '창고재고' : '미배정';
                    let finalCV = isConfirmed ? '창고재고' : '미배정(지시초과)';
                    let finalAllocWh = isConfirmed ? currentQty : 0;
-                   let finalAllocDist = 0;
+                   
+                   // ⭐️ 버그 픽스 핵심: 미배정(에러) 상태로 빠진 초과 수량도 내부적으로는 '할당됨(allocated)'으로 묶어두어, 이후의 자동 배정 로직이 훔쳐가지 못하게 잠급니다.
+                   let finalAllocDist = isConfirmed ? 0 : currentQty; 
 
-                   // ⭐️ 요청사항 픽스: '판매' 공장일 경우 PO가 없어도 에러 없이 판매로 강제 배정 (프리패스)
                    if (factoryName === '판매') {
                        finalComputed = '판매';
                        finalPoNo = 'PO 없음';
@@ -512,7 +588,7 @@ const App = () => {
                        poNo: finalPoNo, poItem: '-', dueDate: '-', orderQty: 0, deliveredQty: 0, pendingQty: 0, availableStock: '-', 
                        allocatedDist: finalAllocDist, allocatedAuto: 0, allocatedAutoDist: 0, allocatedAutoRecv: 0, allocatedPo: 0, 
                        allocatedWarehouse: finalAllocWh, 
-                       allocated: finalAllocDist, isAppendedDist: dist.isAppended, isAirDist: false
+                       allocated: finalAllocDist + finalAllocWh, isAppendedDist: dist.isAppended, isAirDist: false
                    };
                    workingBacklog.push(dummyMissingPO); pnBacklogs.push(dummyMissingPO);
                 }
@@ -548,9 +624,9 @@ const App = () => {
                    partNumber: dist.pn, supplierPN: resolvedSupPN, _cleanPN: dPN, 
                    poNo: 'PO 없음(자동납기제한)', 
                    poItem: '-', dueDate: '-', orderQty: 0, deliveredQty: 0, pendingQty: 0, availableStock: '-', 
-                   allocatedDist: 0, allocatedAuto: 0, allocatedAutoDist: 0, allocatedAutoRecv: 0, allocatedPo: 0, 
-                   allocatedWarehouse: 0, // 👈 자동으로 창고재고로 넘어가지 못하게 막음!
-                   allocated: 0, isAppendedDist: dist.isAppended, isAirDist: false
+                   allocatedDist: 0, allocatedAuto: globalQty, allocatedAutoDist: globalQty, allocatedAutoRecv: 0, allocatedPo: 0, 
+                   allocatedWarehouse: 0, 
+                   allocated: globalQty, isAppendedDist: dist.isAppended, isAirDist: false
                };
                workingBacklog.push(dummyMissingPO); pnBacklogs.push(dummyMissingPO);
           }
@@ -1849,12 +1925,102 @@ const App = () => {
       </header>
 
       <nav className="max-w-[1900px] mx-auto px-10 flex gap-2 pt-4 shrink-0 w-full z-20 relative">
-          {[{ id: 'input', label: '1. 통합 데이터 입력', icon: Database, color: 'indigo' }, { id: 'db', label: '2. 공장/출고처 & 이력 DB 관리', icon: Link2, color: 'sky' }, { id: 'results', label: '3. 배정 분석 및 결과 리포트', icon: BarChart3, color: 'emerald' }, { id: 'manual', label: '4. 시스템 로직 & 사용 설명서', icon: Clipboard, color: 'rose' }].map(tab => (
-            <button key={tab.id} onClick={() => withLoading(() => setActiveTab(tab.id))} className={`flex items-center gap-2.5 px-8 py-4 font-black text-xs rounded-t-xl transition-all border-b-4 ${activeTab === tab.id ? `bg-white border-${tab.color}-500 text-${tab.color}-700 shadow-sm` : 'border-transparent text-slate-500 hover:text-slate-300'}`}><tab.icon size={14} /> {tab.label}</button>
-          ))}
+          {[
+            { id: 'input', label: '1. PO 데이터 입력', icon: Database, color: 'indigo' },
+            { id: 'db', label: '2. 기준정보 관리', icon: Link2, color: 'sky' },
+            { id: 'results', label: '3. 배정 결과 리포트', icon: BarChart3, color: 'emerald' },
+            { id: 'inventory', label: '4. 재고 실사 분석 (New)', icon: PackageCheck, color: 'orange' },
+            { id: 'manual', label: '5. 사용 설명서', icon: Clipboard, color: 'rose' }
+          ].map(tab => {
+            const IconComponent = tab.icon;
+            return (
+              <button key={tab.id} onClick={() => withLoading(() => setActiveTab(tab.id))} 
+                className={`flex items-center gap-2.5 px-8 py-4 font-black text-xs rounded-t-xl transition-all border-b-4 ${activeTab === tab.id ? `bg-white border-${tab.color}-500 text-${tab.color}-700 shadow-sm` : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+                <IconComponent size={16} />
+                {tab.label}
+              </button>
+            );
+          })}
       </nav>
 
       <main className={`max-w-[1900px] mx-auto p-6 w-full flex-1 flex flex-col min-h-0 animate-fade-in ${activeTab === 'results' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+
+        {activeTab === 'inventory' && (
+          <div className="flex flex-col h-full gap-6 animate-fade-in">
+            {/* 데이터 입력 영역 */}
+            <div className="grid grid-cols-3 gap-6 h-1/3 shrink-0">
+              <div onPaste={e => parseInventoryData(e, 'sap')} tabIndex={0} className="paste-area bg-white rounded-3xl border-2 border-dashed border-indigo-200 flex flex-col overflow-hidden shadow-sm focus-within:border-indigo-500 outline-none">
+                <div className="px-4 py-3 bg-indigo-50 border-b border-indigo-100 font-black text-[11px] text-indigo-800">1. SAP 재고 (품번 / 수량)</div>
+                <div className="flex-1 overflow-auto p-4 text-[10px] text-slate-400">
+                  {sapStock.length > 0 ? `${sapStock.length}건 입력됨` : "엑셀의 '품번, 수량' 열을 복사해 붙여넣으세요."}
+                </div>
+              </div>
+
+              <div onPaste={e => parseInventoryData(e, 'loc')} tabIndex={0} className="paste-area bg-white rounded-3xl border-2 border-dashed border-sky-200 flex flex-col overflow-hidden shadow-sm focus-within:border-sky-500 outline-none">
+                <div className="px-4 py-3 bg-sky-50 border-b border-sky-100 font-black text-[11px] text-sky-800">2. 로케이션 재고 (위치 / 품번 / 수량)</div>
+                <div className="flex-1 overflow-auto p-4 text-[10px] text-slate-400">
+                  {locStock.length > 0 ? `${locStock.length}건 입력됨` : "엑셀의 '위치, 품번, 수량' 열을 복사해 붙여넣으세요."}
+                </div>
+              </div>
+
+              <div onPaste={e => parseInventoryData(e, 'out')} tabIndex={0} className="paste-area bg-white rounded-3xl border-2 border-dashed border-emerald-200 flex flex-col overflow-hidden shadow-sm focus-within:border-emerald-500 outline-none">
+                <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 font-black text-[11px] text-emerald-800">3. 출고 예정 (공장 / 품번 / 수량)</div>
+                <div className="flex-1 overflow-auto p-4 text-[10px] text-slate-400">
+                  {outboundStock.length > 0 ? `${outboundStock.length}건 입력됨` : "엑셀의 '공장, 품번, 수량' 열을 복사해 붙여넣으세요."}
+                </div>
+              </div>
+            </div>
+
+            {/* 실행 버튼 */}
+            <div className="flex justify-center">
+              <button onClick={runInventoryAudit} className="px-12 py-4 bg-orange-600 text-white font-black rounded-2xl shadow-xl hover:bg-orange-500 active:scale-95 transition-all">
+                재고 차이 분석 실행
+              </button>
+            </div>
+
+            {/* 결과 테이블 */}
+            <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
+              <div className="px-6 py-4 bg-slate-900 text-white font-black text-sm flex justify-between items-center">
+                <span>재고 실사 분석 결과 리포트</span>
+                <button onClick={() => {
+                  const header = "품번\tSAP재고\t로케이션합계\t차이\t비고\n";
+                  const body = inventoryResults.map(r => `${r.pn}\t${r.sapQty}\t${r.locQty}\t${r.diff}\t${r.remark}`).join('\n');
+                  copyToClipboard(header + body);
+                  alert("결과가 클립보드에 복사되었습니다.");
+                }} className="text-xs bg-slate-700 px-3 py-1 rounded hover:bg-slate-600">엑셀 복사</button>
+              </div>
+              <div className="flex-1 overflow-auto custom-scrollbar">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-slate-100 sticky top-0 font-bold text-slate-600 border-b border-slate-200">
+                    <tr>
+                      <th className="p-4">유라 품번</th>
+                      <th className="p-4 text-right">SAP 재고</th>
+                      <th className="p-4 text-right">로케이션 합계</th>
+                      <th className="p-4 text-right">차이 (Loc - SAP)</th>
+                      <th className="p-4">비고 (출고 예정 정보)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {inventoryResults.map((res, i) => (
+                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 font-black">{res.pn}</td>
+                        <td className="p-4 text-right font-mono">{res.sapQty.toLocaleString()}</td>
+                        <td className="p-4 text-right font-mono">{res.locQty.toLocaleString()}</td>
+                        <td className={`p-4 text-right font-black ${res.diff < 0 ? 'text-rose-600' : res.diff > 0 ? 'text-blue-600' : 'text-slate-400'}`}>
+                          {res.diff > 0 ? `+${res.diff.toLocaleString()}` : res.diff.toLocaleString()}
+                        </td>
+                        <td className="p-4 text-[10px] font-bold text-slate-500">
+                          {res.remark !== '-' ? <span className="bg-orange-50 text-orange-700 px-2 py-1 rounded border border-orange-100">{res.remark}</span> : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'input' && (
           <div className="flex flex-col h-full gap-4 min-h-0">
             <div className="flex justify-end shrink-0">
