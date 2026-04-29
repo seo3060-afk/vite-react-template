@@ -7,20 +7,21 @@ import { collection, doc, getDoc, getDocs, setDoc, deleteDoc, query, orderBy, li
 const App = () => {
   useEffect(() => { document.title = "PO 자동 배정 프로그램 - 슬라이서프로"; }, []);
 
-  // 기존 탭 상태에 'inventory' 추가
   const [activeTab, setActiveTab] = useState('input'); 
+  const [resultSubTab, setResultSubTab] = useState('summary'); 
   
-  // ⭐️ 신규: 재고 실사 데이터 상태
-  const [sapStock, setSapStock] = useState([]);      // SAP 재고
-  const [locStock, setLocStock] = useState([]);      // 로케이션 재고
-  const [outboundStock, setOutboundStock] = useState([]); // 출고 예정 재고
-  const [inventoryResults, setInventoryResults] = useState([]); // 실사 결과 테이블 
-  const [inventoryResults, setInventoryResults] = useState([]); // 실사 결과 테이블 
-  const [infoRecords, setInfoRecords] = useState([]); // ⭐️ 신규: 정보레코드 데이터
-  const [infoRecordSearch, setInfoRecordSearch] = useState(''); // 정보레코드 검색어
-  const [isSyncing, setIsSyncing] = useState(false); // 동기화 상태 표시
+  // ⭐️ 재고 실사 데이터 상태
+  const [sapStock, setSapStock] = useState([]);
+  const [locStock, setLocStock] = useState([]);
+  const [outboundStock, setOutboundStock] = useState([]);
+  const [inventoryResults, setInventoryResults] = useState([]);
 
-  // ⭐️ 신규: 정보레코드 데이터 파싱 (6개 컬럼 대응 및 '임시' 표시 로직)
+  // ⭐️ 정보레코드 데이터 상태
+  const [infoRecords, setInfoRecords] = useState([]);
+  const [infoRecordSearch, setInfoRecordSearch] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // ⭐️ 정보레코드 파싱 (6개 컬럼 대응 및 '임시' 표시 로직)
   const parseInfoRecordData = (e) => {
     e.preventDefault();
     const text = e.clipboardData.getData('text');
@@ -30,8 +31,6 @@ const App = () => {
       const rows = text.split('\n').filter(row => row.trim() !== '');
       const parsed = rows.map(row => {
         const cols = row.split('\t');
-        
-        // 값이 없거나 공백이면 "임시"로 표시하는 내부 함수
         const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
 
         return {
@@ -46,7 +45,6 @@ const App = () => {
         };
       }).filter(p => p.pn !== "임시");
 
-      // 기존 데이터와 병합 (유라품번 기준 최신 데이터 덮어쓰기)
       setInfoRecords(prev => {
         const combined = [...prev];
         parsed.forEach(newItem => {
@@ -70,13 +68,13 @@ const App = () => {
       setIsSyncing(true);
       const { writeBatch, doc } = await import("firebase/firestore");
       
-      const batchSize = 500; // 파이어베이스 제한에 따라 500개씩 분할 업로드
+      const batchSize = 500;
       for (let i = 0; i < infoRecords.length; i += batchSize) {
         const batch = writeBatch(db);
         const chunk = infoRecords.slice(i, i + batchSize);
         
         chunk.forEach(item => {
-          const itemRef = doc(db, 'info_records', item.pn); // info_records 컬렉션 사용
+          const itemRef = doc(db, 'info_records', item.pn);
           batch.set(itemRef, item);
         });
         
@@ -90,76 +88,6 @@ const App = () => {
       setIsSyncing(false);
     }
   };
-  const [infoRecords, setInfoRecords] = useState([]); // ⭐️ 신규: 정보레코드 데이터
-  const [infoRecordSearch, setInfoRecordSearch] = useState(''); // 정보레코드 검색어
-  const [isSyncing, setIsSyncing] = useState(false); // 동기화 상태 표시
-
-  // ⭐️ 신규: 정보레코드 데이터 파싱 및 부분(누적) 업로드 로직
-  const parseInfoRecordData = async (e) => {
-    e.preventDefault();
-    const text = e.clipboardData.getData('text');
-    if (!text) return;
-
-    const rows = text.split('\n').filter(row => row.trim() !== '');
-    const parsed = rows.map(row => {
-      const cols = row.split('\t');
-      return {
-        pn: cleanPN(cols[0]),
-        rawPn: cols[0]?.trim(),
-        supplierPn: cols[1]?.trim() || '-',
-        description: cols[2]?.trim() || '-',
-        vendor: cols[3]?.trim() || '-',
-        unit: cols[4]?.trim() || 'EA',
-        lastUpdated: new Date().toLocaleString()
-      };
-    }).filter(p => p.pn);
-
-    // ⭐️ 기존 데이터와 병합 (품번 기준 중복 제거)
-    setInfoRecords(prev => {
-      const combined = [...prev];
-      parsed.forEach(newItem => {
-        const idx = combined.findIndex(item => item.pn === newItem.pn);
-        if (idx > -1) combined[idx] = newItem; // 기존 항목 업데이트
-        else combined.push(newItem); // 신규 항목 추가
-      });
-      return combined;
-    });
-
-    alert(`${parsed.length}건의 정보가 로컬에 반영되었습니다. [서버 동기화] 버튼을 눌러 클라우드에 저장하세요.`);
-  };
-
-  // ⭐️ 3만건 대응: 파이어베이스 컬렉션 단위 부분 업로드 (Batch 방식)
-  const syncInfoRecordsToFirebase = async () => {
-    if (infoRecords.length === 0) return;
-    if (!window.confirm(`${infoRecords.length}건의 데이터를 클라우드 서버에 저장하시겠습니까?`)) return;
-
-    try {
-      setIsSyncing(true);
-      const { writeBatch, doc } = await import("firebase/firestore");
-      
-      // 500개씩 쪼개서 업로드 (파이어베이스 제한 준수)
-      const batchSize = 500;
-      for (let i = 0; i < infoRecords.length; i += batchSize) {
-        const batch = writeBatch(db);
-        const chunk = infoRecords.slice(i, i + batchSize);
-        
-        chunk.forEach(item => {
-          const itemRef = doc(db, 'part_info', item.pn); // 품번별 개별 문서화
-          batch.set(itemRef, item);
-        });
-        
-        await batch.commit();
-        console.log(`${i + chunk.length}건 업로드 완료...`);
-      }
-      alert("모든 정보레코드가 클라우드 서버에 안전하게 저장되었습니다.");
-    } catch (e) {
-      console.error(e);
-      alert("동기화 중 오류가 발생했습니다.");
-    } finally {
-      setIsSyncing(false);
-    }
-  }; 
-  const [resultSubTab, setResultSubTab] = useState('summary'); 
   const [backlogData, setBacklogData] = useState([]);   
   const [distData, setDistData] = useState([]);         
   const [poDistData, setPoDistData] = useState([]); 
@@ -2098,7 +2026,6 @@ const App = () => {
 
         {activeTab === 'inventory' && (
           <div className="flex flex-col h-full gap-6 animate-fade-in">
-            {/* 데이터 입력 영역 */}
             <div className="grid grid-cols-3 gap-6 h-1/3 shrink-0">
               <div onPaste={e => parseInventoryData(e, 'sap')} tabIndex={0} className="paste-area bg-white rounded-3xl border-2 border-dashed border-indigo-200 flex flex-col overflow-hidden shadow-sm focus-within:border-indigo-500 outline-none">
                 <div className="px-4 py-3 bg-indigo-50 border-b border-indigo-100 font-black text-[11px] text-indigo-800">1. SAP 재고 (품번 / 수량)</div>
@@ -2106,14 +2033,12 @@ const App = () => {
                   {sapStock.length > 0 ? `${sapStock.length}건 입력됨` : "엑셀의 '품번, 수량' 열을 복사해 붙여넣으세요."}
                 </div>
               </div>
-
               <div onPaste={e => parseInventoryData(e, 'loc')} tabIndex={0} className="paste-area bg-white rounded-3xl border-2 border-dashed border-sky-200 flex flex-col overflow-hidden shadow-sm focus-within:border-sky-500 outline-none">
                 <div className="px-4 py-3 bg-sky-50 border-b border-sky-100 font-black text-[11px] text-sky-800">2. 로케이션 재고 (위치 / 품번 / 수량)</div>
                 <div className="flex-1 overflow-auto p-4 text-[10px] text-slate-400">
                   {locStock.length > 0 ? `${locStock.length}건 입력됨` : "엑셀의 '위치, 품번, 수량' 열을 복사해 붙여넣으세요."}
                 </div>
               </div>
-
               <div onPaste={e => parseInventoryData(e, 'out')} tabIndex={0} className="paste-area bg-white rounded-3xl border-2 border-dashed border-emerald-200 flex flex-col overflow-hidden shadow-sm focus-within:border-emerald-500 outline-none">
                 <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 font-black text-[11px] text-emerald-800">3. 출고 예정 (공장 / 품번 / 수량)</div>
                 <div className="flex-1 overflow-auto p-4 text-[10px] text-slate-400">
@@ -2121,9 +2046,54 @@ const App = () => {
                 </div>
               </div>
             </div>
+            <div className="flex justify-center">
+              <button onClick={runInventoryAudit} className="px-12 py-4 bg-orange-600 text-white font-black rounded-2xl shadow-xl hover:bg-orange-500 active:scale-95 transition-all">
+                재고 차이 분석 실행
+              </button>
+            </div>
+            <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
+              <div className="px-6 py-4 bg-slate-900 text-white font-black text-sm flex justify-between items-center">
+                <span>재고 실사 분석 결과 리포트</span>
+                <button onClick={() => {
+                  const header = "품번\tSAP재고\t로케이션합계\t차이\t비고\n";
+                  const body = inventoryResults.map(r => `${r.pn}\t${r.sapQty}\t${r.locQty}\t${r.diff}\t${r.remark}`).join('\n');
+                  copyToClipboard(header + body);
+                  alert("결과가 클립보드에 복사되었습니다.");
+                }} className="text-xs bg-slate-700 px-3 py-1 rounded hover:bg-slate-600">엑셀 복사</button>
+              </div>
+              <div className="flex-1 overflow-auto custom-scrollbar">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-slate-100 sticky top-0 font-bold text-slate-600 border-b border-slate-200">
+                    <tr>
+                      <th className="p-4">유라 품번</th>
+                      <th className="p-4 text-right">SAP 재고</th>
+                      <th className="p-4 text-right">로케이션 합계</th>
+                      <th className="p-4 text-right">차이 (Loc - SAP)</th>
+                      <th className="p-4">비고 (출고 예정 정보)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {inventoryResults.map((res, i) => (
+                      <tr key={i} className="hover:bg-slate-50 transition-colors">
+                        <td className="p-4 font-black">{res.pn}</td>
+                        <td className="p-4 text-right font-mono">{res.sapQty.toLocaleString()}</td>
+                        <td className="p-4 text-right font-mono">{res.locQty.toLocaleString()}</td>
+                        <td className={`p-4 text-right font-black ${res.diff < 0 ? 'text-rose-600' : res.diff > 0 ? 'text-blue-600' : 'text-slate-400'}`}>
+                          {res.diff > 0 ? `+${res.diff.toLocaleString()}` : res.diff.toLocaleString()}
+                        </td>
+                        <td className="p-4 text-[10px] font-bold text-slate-500">
+                          {res.remark !== '-' ? <span className="bg-orange-50 text-orange-700 px-2 py-1 rounded border border-orange-100">{res.remark}</span> : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
 
-
-            {activeTab === 'info_record' && (
+        {activeTab === 'info_record' && (
           <div className="flex flex-col h-full gap-6 animate-fade-in">
             <div className="flex justify-between items-center bg-white p-6 rounded-3xl shadow-sm border border-slate-200 shrink-0">
               <div className="flex flex-col gap-1">
@@ -2177,113 +2147,6 @@ const App = () => {
                 {infoRecords.length > 50 && (
                   <div className="p-4 text-center text-slate-400 font-bold text-[10px] bg-slate-50 italic">... 데이터가 많아 상위 50건만 표시 중입니다. 검색 기능을 이용하세요 ...</div>
                 )}
-              </div>
-            </div>
-          </div>
-        )}
-
-            {activeTab === 'info_record' && (
-          <div className="flex flex-col h-full gap-6 animate-fade-in">
-            <div className="flex justify-between items-center bg-white p-6 rounded-3xl shadow-sm border border-slate-200 shrink-0">
-              <div className="flex flex-col gap-1">
-                <h3 className="text-xl font-black text-purple-800 uppercase italic">Information Record Management</h3>
-                <p className="text-xs font-bold text-slate-400">품번별 마스터 정보를 관리합니다. (현재 로컬: {infoRecords.length.toLocaleString()}건)</p>
-              </div>
-              <div className="flex gap-3">
-                <div className="relative">
-                  <Search size={16} className="absolute left-3 top-3 text-slate-400" />
-                  <input type="text" placeholder="마스터 품번 검색..." value={infoRecordSearch} onChange={e => setInfoRecordSearch(e.target.value)} className="pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold outline-none focus:border-purple-500 w-64 shadow-inner" />
-                </div>
-                <button onClick={syncInfoRecordsToFirebase} disabled={isSyncing} className={`px-6 py-2.5 rounded-xl font-black text-xs shadow-lg transition-all flex items-center gap-2 ${isSyncing ? 'bg-slate-400' : 'bg-purple-600 text-white hover:bg-purple-500 active:scale-95'}`}>
-                  {isSyncing ? <Loader2 className="animate-spin" size={14}/> : <RefreshCw size={14}/>}
-                  서버 동기화 (Partial Upload)
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 flex-1 min-h-0 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
-              <div onPaste={parseInfoRecordData} tabIndex={0} className="p-4 bg-purple-50 border-b border-purple-100 text-center cursor-pointer hover:bg-purple-100 transition-all group shrink-0 outline-none">
-                <p className="text-[11px] font-black text-purple-700">여기를 클릭 후 엑셀 데이터를 붙여넣으세요 (Ctrl+V)</p>
-                <p className="text-[9px] text-purple-400 font-bold mt-1 uppercase tracking-widest">[ 형식: 유라품번 | 업체품번 | 품명 | 공급사 | 단위 ]</p>
-              </div>
-              <div className="flex-1 overflow-auto custom-scrollbar">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-slate-900 text-white sticky top-0 font-bold">
-                    <tr>
-                      <th className="p-4">YURA 품번</th>
-                      <th className="p-4 text-emerald-400">업체 품번</th>
-                      <th className="p-4">품명 (Description)</th>
-                      <th className="p-4 text-purple-300">공급사</th>
-                      <th className="p-4">단위</th>
-                      <th className="p-4 text-right">최종 업데이트</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {infoRecords.filter(item => item.pn.includes(cleanPN(infoRecordSearch))).slice(0, 100).map((item, i) => (
-                      <tr key={item.pn} className="hover:bg-slate-50 transition-colors">
-                        <td className="p-4 font-black">{item.rawPn}</td>
-                        <td className="p-4 font-bold text-emerald-600">{item.supplierPn}</td>
-                        <td className="p-4 font-bold text-slate-600">{item.description}</td>
-                        <td className="p-4 font-black text-purple-700">{item.vendor}</td>
-                        <td className="p-4 font-bold">{item.unit}</td>
-                        <td className="p-4 text-right text-slate-400 font-mono text-[10px]">{item.lastUpdated}</td>
-                      </tr>
-                    ))}
-                    {infoRecords.length > 100 && (
-                      <tr><td colSpan="6" className="p-4 text-center text-slate-400 font-bold italic">... 데이터가 많아 상위 100건만 표시 중입니다. 검색을 이용하세요. ...</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-            {/* 실행 버튼 */}
-            <div className="flex justify-center">
-              <button onClick={runInventoryAudit} className="px-12 py-4 bg-orange-600 text-white font-black rounded-2xl shadow-xl hover:bg-orange-500 active:scale-95 transition-all">
-                재고 차이 분석 실행
-              </button>
-            </div>
-
-            {/* 결과 테이블 */}
-            <div className="flex-1 bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
-              <div className="px-6 py-4 bg-slate-900 text-white font-black text-sm flex justify-between items-center">
-                <span>재고 실사 분석 결과 리포트</span>
-                <button onClick={() => {
-                  const header = "품번\tSAP재고\t로케이션합계\t차이\t비고\n";
-                  const body = inventoryResults.map(r => `${r.pn}\t${r.sapQty}\t${r.locQty}\t${r.diff}\t${r.remark}`).join('\n');
-                  copyToClipboard(header + body);
-                  alert("결과가 클립보드에 복사되었습니다.");
-                }} className="text-xs bg-slate-700 px-3 py-1 rounded hover:bg-slate-600">엑셀 복사</button>
-              </div>
-              <div className="flex-1 overflow-auto custom-scrollbar">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-slate-100 sticky top-0 font-bold text-slate-600 border-b border-slate-200">
-                    <tr>
-                      <th className="p-4">유라 품번</th>
-                      <th className="p-4 text-right">SAP 재고</th>
-                      <th className="p-4 text-right">로케이션 합계</th>
-                      <th className="p-4 text-right">차이 (Loc - SAP)</th>
-                      <th className="p-4">비고 (출고 예정 정보)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {inventoryResults.map((res, i) => (
-                      <tr key={i} className="hover:bg-slate-50 transition-colors">
-                        <td className="p-4 font-black">{res.pn}</td>
-                        <td className="p-4 text-right font-mono">{res.sapQty.toLocaleString()}</td>
-                        <td className="p-4 text-right font-mono">{res.locQty.toLocaleString()}</td>
-                        <td className={`p-4 text-right font-black ${res.diff < 0 ? 'text-rose-600' : res.diff > 0 ? 'text-blue-600' : 'text-slate-400'}`}>
-                          {res.diff > 0 ? `+${res.diff.toLocaleString()}` : res.diff.toLocaleString()}
-                        </td>
-                        <td className="p-4 text-[10px] font-bold text-slate-500">
-                          {res.remark !== '-' ? <span className="bg-orange-50 text-orange-700 px-2 py-1 rounded border border-orange-100">{res.remark}</span> : '-'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             </div>
           </div>
