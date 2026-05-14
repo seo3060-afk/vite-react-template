@@ -27,9 +27,13 @@ const App = () => {
   const parseInfoRecordData = (e) => {
     e.preventDefault(); const text = e.clipboardData.getData('text'); if (!text) return;
     withLoading(() => {
-      const rows = text.split('\n').filter(row => row.trim() !== '');
+      // ⭐️ 엑셀 찌꺼기(Alt+Enter 줄바꿈) 방지 로직
+      let t = text.replace(/\r/g, ''); let q = false; let c = "";
+      for(let i=0; i<t.length; i++) { if(t[i]==='"') q=!q; else if(t[i]==='\n' && q) c+=" "; else c+=t[i]; }
+      
+      const rows = c.split('\n').filter(row => row.trim() !== '');
       const parsed = rows.map(row => {
-        const cols = row.split('\t'); const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
+        const cols = row.split('\t').map(col => col.replace(/"/g, '')); const val = (v) => (v && v.trim() !== '') ? v.trim() : "임시";
         return { pn: cleanPN(cols[0]), rawPn: val(cols[0]), supplierPn: val(cols[1]), itemName: val(cols[2]), manufacturer: val(cols[3]), moq: val(cols[4]), ppq: val(cols[5]), lastUpdated: new Date().toLocaleString() };
       }).filter(p => p.pn !== "임시");
       setInfoRecords(prev => {
@@ -308,9 +312,13 @@ const App = () => {
   };
 
   const parseRawText = (text, type, isAppended = false) => {
-    const rows = text.split('\n').filter(row => row.trim() !== '');
+    // ⭐️ 엑셀 찌꺼기(Alt+Enter 줄바꿈) 방지 로직
+    let t = text.replace(/\r/g, ''); let q = false; let c = "";
+    for(let i=0; i<t.length; i++) { if(t[i]==='"') q=!q; else if(t[i]==='\n' && q) c+=" "; else c+=t[i]; }
+    
+    const rows = c.split('\n').filter(row => row.trim() !== '');
     return rows.map((row, index) => {
-      const cols = row.split('\t');
+      const cols = row.split('\t').map(col => col.replace(/"/g, ''));
       if (type === 'fdb') {
         const cv = cols[0]?.trim() || '';
         const existing = factoryDB.find(db => db.countryVehicle === cv);
@@ -359,9 +367,13 @@ const App = () => {
     if (!text) return;
 
     withLoading(() => {
-      const rows = text.split('\n').filter(row => row.trim() !== '');
+      // ⭐️ 엑셀 찌꺼기(Alt+Enter 줄바꿈) 방지 로직
+      let t = text.replace(/\r/g, ''); let q = false; let c = "";
+      for(let i=0; i<t.length; i++) { if(t[i]==='"') q=!q; else if(t[i]==='\n' && q) c+=" "; else c+=t[i]; }
+      
+      const rows = c.split('\n').filter(row => row.trim() !== '');
       const parsed = rows.map((row) => {
-        const cols = row.split('\t');
+        const cols = row.split('\t').map(col => col.replace(/"/g, ''));
         const rawPn = cols[type === 'loc' || type === 'out' ? 1 : 0]?.trim() || '';
         const qtyIndex = type === 'loc' ? 2 : (type === 'out' ? 2 : 1);
         
