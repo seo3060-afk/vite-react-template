@@ -185,15 +185,10 @@ const App = () => {
   }, []);
 
   const cleanPN = str => String(str || '').replace(/[\s-]/g, '').toUpperCase();
-  // ⭐️ 픽스: 20260720, 260720 등 모든 포맷을 완벽하게 날짜로 치환하여 9999년 에러 방지
   const parseDateSafe = (dateStr) => {
-    if (!dateStr || String(dateStr).trim() === '-' || String(dateStr).trim() === '') return new Date(9999, 11, 31);
-    const str = String(dateStr).trim();
-    const m = str.match(/(\d{2,4})[-./](\d{1,2})[-./](\d{1,2})/);
+    if (!dateStr || dateStr === '-') return new Date(9999, 11, 31);
+    const m = String(dateStr).match(/(\d{2,4})[-./](\d{1,2})[-./](\d{1,2})/);
     if (m) { let y = parseInt(m[1], 10); if (y < 100) y += 2000; return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[3], 10)); }
-    const s = str.replace(/[^0-9]/g, '');
-    if (s.length === 8) { return new Date(parseInt(s.substring(0, 4), 10), parseInt(s.substring(4, 6), 10) - 1, parseInt(s.substring(6, 8), 10)); }
-    if (s.length === 6) { return new Date(2000 + parseInt(s.substring(0, 2), 10), parseInt(s.substring(2, 4), 10) - 1, parseInt(s.substring(4, 6), 10)); }
     return new Date(9999, 11, 31);
   };
   const sortByDueDateAndPO = (a, b) => { const dc = (a.dueDate || '').localeCompare(b.dueDate || ''); if (dc !== 0) return dc; return (a.poNo || '').localeCompare(b.poNo || '', undefined, { numeric: true, sensitivity: 'base' }); };
@@ -511,25 +506,16 @@ const App = () => {
     const isWithinLimits = (target) => {
       const targetDate = parseDateSafe(target.dueDate);
       let fCut = new Date(9999, 11, 31); let sCut = new Date(9999, 11, 31);
-      
       const mFDB = currentDB.find(db => db.countryVehicle === target.countryVehicle);
       if (mFDB) {
         if (mFDB.isExcluded) return false; 
-        // ⭐️ 픽스: D+ 값에 '0'이 들어가도 False로 처리되지 않도록 명시적 조건 추가
-        if (mFDB.dPlus !== '' && mFDB.dPlus !== null && mFDB.dPlus !== undefined) { 
-            fCut = new Date(today.getTime()); 
-            fCut.setDate(fCut.getDate() + parseInt(mFDB.dPlus, 10)); 
-        }
+        if (mFDB.dPlus) { fCut = new Date(today); fCut.setDate(fCut.getDate() + parseInt(mFDB.dPlus, 10)); }
         if (mFDB.isCurrentMonthOnly && targetDate > endOfCurrentMonth) return false; 
       }
-      
       const mSup = currentSuppliers.find(s => s.name === target.supplier);
       if (mSup) {
         if (mSup.isExcluded) return false; 
-        if (mSup.dPlus !== '' && mSup.dPlus !== null && mSup.dPlus !== undefined) { 
-            sCut = new Date(today.getTime()); 
-            sCut.setDate(sCut.getDate() + parseInt(mSup.dPlus, 10)); 
-        }
+        if (mSup.dPlus) { sCut = new Date(today); sCut.setDate(sCut.getDate() + parseInt(mSup.dPlus, 10)); }
         if (mSup.isCurrentMonthOnly && targetDate > endOfCurrentMonth) return false; 
       }
       return targetDate <= fCut && targetDate <= sCut;
